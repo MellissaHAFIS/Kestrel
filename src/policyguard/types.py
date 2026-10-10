@@ -1,13 +1,10 @@
 """PolicyGuard shared contract: Source, Verdict, Action, Evidence, Decision.
 
 # =====================================================================
-# FROZEN CONTRACT: changing this needs all four owners to agree.
+# FROZEN CONTRACT: changing this needs all owners to agree.
 # =====================================================================
 
-Every component builds against these types. The single integration seam is
-`policyguard.pipeline.review(action: Action) -> Decision`.
-
-Stdlib only. Everything is JSON-serializable through to_dict()/from_dict().
+Every component builds against these types. Stdlib only.
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ class Source(str, Enum):
 
 
 class Verdict(str, Enum):
-    """Final outcome of a review."""
+    """Final outcome of a review. Values equal their names."""
 
     ALLOW = "ALLOW"
     BLOCK = "BLOCK"
@@ -56,6 +53,11 @@ class Action:
     sources: list[Source]
     history_ref: str | None
     ts: float
+
+    @property
+    def qualified_tool(self) -> str:
+        """Fully-qualified tool name: ``server.tool``."""
+        return f"{self.server}.{self.tool}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,54 +85,57 @@ class Action:
 
 @dataclass
 class Evidence:
-    """An observation collected by an Investigator tool. Reports may only cite these ids."""
+    """A single observation that justifies a Decision.
+
+    `kind` is a short machine-readable tag (e.g. ``canary_match``). `detail`
+    is human-readable and MUST NOT contain the raw matched secret. `source_tool`
+    names the component that produced the evidence.
+    """
 
     id: str
-    tool: str
-    observation: str
-    source: Source | None
-    ts: float
+    kind: str
+    detail: str
+    source_tool: str = "invariants"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "tool": self.tool,
-            "observation": self.observation,
-            "source": self.source.value if self.source is not None else None,
-            "ts": self.ts,
+            "kind": self.kind,
+            "detail": self.detail,
+            "source_tool": self.source_tool,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Evidence:
-        src = d.get("source")
         return cls(
             id=d["id"],
-            tool=d["tool"],
-            observation=d["observation"],
-            source=Source(src) if src is not None else None,
-            ts=float(d["ts"]),
+            kind=d["kind"],
+            detail=d["detail"],
+            source_tool=d.get("source_tool", "invariants"),
         )
 
 
 @dataclass
 class Decision:
-    """Outcome of pipeline.review(). `layer` names who decided (registry, invariants, gate, investigator, ...)."""
+    """Outcome of a review layer. `layer` names who decided (invariants, gate, ...)."""
 
     verdict: Verdict
     layer: str
+    reason: str
     score: float | None = None
     confidence: float | None = None
     evidence_ids: list[str] = field(default_factory=list)
-    reason: str = ""
+    evidence: list[Evidence] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "verdict": self.verdict.value,
             "layer": self.layer,
+            "reason": self.reason,
             "score": self.score,
             "confidence": self.confidence,
             "evidence_ids": list(self.evidence_ids),
-            "reason": self.reason,
+            "evidence": [e.to_dict() for e in self.evidence],
         }
 
     @classmethod
@@ -138,8 +143,9 @@ class Decision:
         return cls(
             verdict=Verdict(d["verdict"]),
             layer=d["layer"],
+            reason=d.get("reason", ""),
             score=d.get("score"),
             confidence=d.get("confidence"),
             evidence_ids=list(d.get("evidence_ids", [])),
-            reason=d.get("reason", ""),
+            evidence=[Evidence.from_dict(e) for e in d.get("evidence", [])],
         )
