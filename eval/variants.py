@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from policyguard.types import Action, Decision, Verdict
+from policyguard.compat import Decision, Verdict  # pre-freeze names, see policyguard/compat.py
+from policyguard.types import Action
 
 
 class Variant(Protocol):

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -29,6 +30,10 @@ from typing import Any, Protocol
 from policyguard.config import Config, LLMConfig, load_config
 
 logger = logging.getLogger(__name__)
+
+#: Keys issued by "Claude Platform on AWS" start with this prefix. That is a different service from
+#: Amazon Bedrock and from the first-party Claude API; keys do not work across them.
+_AWS_KEY_PREFIX = "aws-external-anthropic-api-key-"
 
 #: Delimiter the Investigator wraps the action in. MockLLM parses it; the real
 #: model is told everything inside it is untrusted DATA, never instructions.
@@ -356,6 +361,25 @@ class ClaudeLLM:
                 "the 'anthropic' package is required for the Claude provider; "
                 "install it or set mock_mode: true in config/policyguard.yaml"
             ) from exc
+        if key.startswith(_AWS_KEY_PREFIX):
+            # Claude Platform on AWS: the Anthropic Messages API behind an AWS endpoint. It needs a
+            # region (picks the endpoint) and a workspace id (wrkspc_...).
+            region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+            workspace = os.environ.get("ANTHROPIC_AWS_WORKSPACE_ID")
+            if not region or not workspace:
+                raise ValueError(
+                    "this is a Claude Platform on AWS key: set AWS_REGION and "
+                    "ANTHROPIC_AWS_WORKSPACE_ID (wrkspc_...) in .env"
+                )
+            from anthropic import AsyncAnthropicAWS
+
+            self._client = AsyncAnthropicAWS(
+                api_key=key,
+                aws_region=region,
+                workspace_id=workspace,
+                timeout=cfg.request_timeout,
+            )
+            return
         self._client = AsyncAnthropic(
             api_key=key,
             base_url=cfg.base_url,
@@ -369,7 +393,7 @@ class ClaudeLLM:
         request: dict[str, Any] = {
             "model": self.cfg.model,
             "max_tokens": self.cfg.max_tokens,
-            "temperature": self.cfg.temperature,
+            # anthropic 1.13 messages.create() takes no temperature; sending it raised TypeError on every call.
             "messages": claude_messages,
         }
         if system:
@@ -449,6 +473,28 @@ def _to_claude_tool(openai_tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+class BedrockClaudeLLM(ClaudeLLM):
+    """Claude through Amazon Bedrock (SigV4 via boto3). Used in the hackathon account.
+
+    Reuses ClaudeLLM's OpenAI->Claude message translation; only the client and the
+    request differ. Credentials come from the standard AWS chain (env vars, shared
+    config, or a named profile). Region defaults to us-east-1, the hackathon region.
+    """
+
+    def __init__(self, cfg: LLMConfig) -> None:
+        # Skip ClaudeLLM.__init__ (it wants an Anthropic api key); set up a Bedrock client instead.
+        self.cfg = cfg
+        try:
+            from anthropic import AsyncAnthropicBedrock
+        except ModuleNotFoundError as exc:  # pragma: no cover - needs the real dep
+            raise ModuleNotFoundError(
+                "the 'anthropic' package is required for the Bedrock provider"
+            ) from exc
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+        self._client = AsyncAnthropicBedrock(aws_region=region, timeout=cfg.request_timeout)
+
+
 # ── Factory ────────────────────────────────────────────────────────────────
 
 
@@ -465,6 +511,13 @@ def build_llm(config: Config | None = None) -> LLMClient:
         logger.warning("PolicyGuard Investigator: using MockLLM (mock_mode enabled in config)")
         return MockLLM()
 
+    if cfg.llm.provider == "bedrock":
+        try:
+            return BedrockClaudeLLM(cfg.llm)
+        except Exception as exc:  # noqa: BLE001 - never let provider setup break the guard
+            logger.warning("PolicyGuard Investigator: using MockLLM (%s)", exc)
+            return MockLLM()
+
     if cfg.llm.api_key is None:
         logger.warning(
             "PolicyGuard Investigator: using MockLLM (no API key in $%s)", cfg.llm.api_key_env
@@ -474,6 +527,7 @@ def build_llm(config: Config | None = None) -> LLMClient:
     provider_classes: dict[str, type] = {
         "deepseek": DeepSeekLLM,
         "anthropic": ClaudeLLM,
+        "bedrock": BedrockClaudeLLM,
     }
     provider_cls = provider_classes.get(cfg.llm.provider)
     if provider_cls is None:
@@ -487,3 +541,32 @@ def build_llm(config: Config | None = None) -> LLMClient:
     except Exception as exc:  # noqa: BLE001 - never let provider setup break the guard
         logger.warning("PolicyGuard Investigator: using MockLLM (%s)", exc)
         return MockLLM()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual check: python -m policyguard.investigator.llm [model ...]
+    import asyncio
+    import dataclasses
+    import sys
+
+    async def _check(models: list[str]) -> int:
+        cfg = load_config()
+        print(
+            f"provider={cfg.llm.provider} key env {cfg.llm.api_key_env} "
+            f"set={cfg.llm.api_key is not None} mock_mode={cfg.mock_mode}"
+        )
+        for model in models or [cfg.llm.model]:
+            trial = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, model=model))
+            client = build_llm(trial)
+            if isinstance(client, MockLLM):
+                print(f"{model}: fell back to MockLLM (see the warning above); no real model was called")
+                return 2
+            try:
+                reply = await client.chat([{"role": "user", "content": "Reply with the single word OK."}])
+            except Exception as exc:  # noqa: BLE001
+                print(f"{model}: FAILED {exc!r}")
+                continue
+            print(f"{model}: OK -> {reply.content.strip()[:40]!r}")
+            return 0
+        return 1
+
+    raise SystemExit(asyncio.run(_check(sys.argv[1:])))

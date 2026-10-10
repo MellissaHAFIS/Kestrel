@@ -18,6 +18,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+!.env.aws.example
 # demo/fixture_repo/.env is a deliberate FAKE (canary) and must stay tracked
 !demo/fixture_repo/.env
 
@@ -25,6 +26,7 @@ node_modules/
 *.db
 *.sqlite3
 demo/leak_log.jsonl
+eval/results/
 
 # Tooling
 .agents/

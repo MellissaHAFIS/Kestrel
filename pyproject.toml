@@ -32,6 +32,9 @@ ml = [
     "transformers==5.19.0",
     "torch==2.14.1",
 ]
+bench = [
+    "matplotlib==3.11.2",  # eval/chart.py: the results chart
+]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",

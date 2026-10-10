@@ -19,10 +19,20 @@ chainlit run console/app.py       # analyst console (fake incidents for now)
 
 python -m demo.run_no_guard       # Act 1: the attack works, see demo/leak_log.jsonl
 python -m demo.run_guarded        # Act 2: same task behind PolicyGuard
-python -m eval.run_eval --variants 0 H --split validation
+python -m eval.run_eval              # benchmark: with vs without the guard (see Benchmark below)
 ```
 
 Run the demo commands from the repo root.
+
+## Benchmark
+
+`python -m eval.run_eval` replays the labelled attack and benign chains in `eval/cases.py` through the guard and prints attack success and benign task completion with and without it. It writes `eval/results/<run>.json` and the two-panel chart (`.png`) next to it. Re-draw a chart from a stored run with `python -m eval.chart eval/results/<run>.json --out chart.png`.
+
+- Default is offline: the Investigator runs on MockLLM and the chart says so. `--mode real` uses the LLM from `.env` and sends the chains (fake secrets only) to that provider.
+- Real numbers on the hackathon account: `python -m eval.run_eval --mode bedrock`. Put the temporary AWS creds from the Workshop Studio event page into `.env.aws` (copy `.env.aws.example`; it is git-ignored). This calls Claude Haiku 4.5 on Amazon Bedrock in us-east-1 and paces calls to about 1/second.
+- `pip install -e '.[bench]'` installs the chart dependency (matplotlib).
+- The set is small, custom and scripted, and was written by the team that built the guard. Say that when you show the numbers. The without-guard bars hold by construction.
+- Edit chains in `eval/cases.py`, then run `python -m eval.cases` to refresh `eval/data/chains.jsonl`.
 
 ## CONTRACT (frozen)
 
