@@ -20,6 +20,9 @@ dependencies = [
     "PyYAML==6.0.3",
     "detect-secrets==1.5.0",
     "chainlit==2.12.0",
+    "openai==3.28.0",            # DeepSeek via its OpenAI-compatible API
+    "anthropic==1.13.0",         # Claude provider for the Investigator
+    "python-dotenv==1.2.4",     # loads DEEPSEEK_API_KEY from .env
 ]
 
 [project.optional-dependencies]
@@ -31,6 +34,7 @@ ml = [
 ]
 dev = [
     "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -39,3 +43,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+# The Investigator and the audit log are async; let pytest-asyncio drive them.
+asyncio_mode = "auto"

@@ -53,7 +53,9 @@ import urllib.parse
 from typing import Any, Iterable
 
 from policyguard.policy import Policy
-from policyguard.types import Action, Decision, Evidence, Verdict
+# Legacy contract: see policyguard/compat.py. types.py is frozen and no
+# longer exports Decision/Evidence(kind,detail)/Verdict-as-enum.
+from policyguard.compat import Action, Decision, Evidence, Verdict
 
 # --------------------------------------------------------------------------
 # Built-in secret patterns. (name -> compiled regex)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from policyguard.types import Source
+from policyguard.compat import Source  # frozen types.py exports SourceLabel, not Source
 
 
 @dataclass

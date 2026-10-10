@@ -1,0 +1,55 @@
+# PolicyGuard runtime configuration. NON-SECRET SETTINGS ONLY.
+#
+# The agent mandate and every security threshold live in policy/devassist.yaml.
+# This file holds operational knobs only: which model to call and how hard to
+# work. Never put an API key here -- only the NAME of the env var to read it
+# from. The provider itself can also be switched with LLM_PROVIDER in .env,
+# which overrides `llm.provider` below without touching this file.
+
+llm:
+  # deepseek | anthropic (the env var LLM_PROVIDER, if set, wins over this;
+  # "claude" is accepted there too and normalizes to "anthropic").
+  provider: deepseek
+
+  # Leave base_url / model / api_key_env unset to use the verified per-provider
+  # defaults in src/policyguard/config.py:
+  #   deepseek  -> https://api.deepseek.com,  model deepseek-flash,  $DEEPSEEK_API_KEY
+  #   anthropic -> https://api.anthropic.com, model claude-sonnet-5, $ANTHROPIC_API_KEY
+  # Uncomment to override:
+  # base_url: https://api.deepseek.com
+  # model: deepseek-flash
+  # api_key_env: DEEPSEEK_API_KEY
+
+  # DEEPSEEK NOTE -- VERIFIED against https://api-docs.deepseek.com/ : the
+  # legacy alias `deepseek-chat` was RETIRED on 2026-07-24 and now errors; do
+  # not reintroduce it. Thinking mode is ON by default and must be disabled
+  # explicitly, because it SILENTLY IGNORES `temperature` while enabled, so
+  # temperature 0 below only takes effect while thinking stays disabled.
+  # Passed through the OpenAI SDK's extra_body. Not read by the Claude path.
+  thinking: disabled
+
+  temperature: 0
+  max_tokens: 1024
+  request_timeout: 30
+
+  # NOT VERIFIED for this account: DeepSeek's `strict` structured-output mode
+  # needs base_url https://api.deepseek.com/beta and `"strict": true` on each
+  # function. Left off until someone confirms it against a real key. The
+  # Investigator does not depend on it; it validates model output itself and
+  # falls back to ESCALATE on anything malformed.
+  strict_tools: false
+
+investigator:
+  # Hard ceiling on reason/tool turns. The lower of this and
+  # thresholds.max_steps in the policy wins, so the policy can only tighten.
+  step_budget: 6
+
+human_in_the_loop:
+  # Seconds to wait for an analyst decision before failing closed to BLOCK.
+  # Short in tests, long for the demo.
+  wait_timeout: 300
+  poll_interval: 0.5
+
+# Force MockLLM even when a key is present. MockLLM is also the automatic
+# fallback whenever the key is missing.
+mock_mode: false

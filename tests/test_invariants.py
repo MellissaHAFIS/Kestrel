@@ -12,7 +12,7 @@ import pytest
 
 from policyguard.invariants import check_invariants
 from policyguard.policy import load_policy
-from policyguard.types import Action, Source, Verdict
+from policyguard.compat import Action, Source, Verdict
 
 CANARY = "CANARY-7f3a9c21-DO-NOT-USE"
 

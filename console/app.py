@@ -10,13 +10,27 @@ Commands: queue | log | approve <id> | block <id> | kill
 
 from __future__ import annotations
 
+import sys
 import uuid
+from pathlib import Path
 
-import chainlit as cl
+# Make `policyguard` importable even when the editable install is not in effect.
+# Why this is needed: `pip install -e .` drops a .pth file into site-packages that
+# adds <repo>/src to sys.path. On macOS that file can end up with the UF_HIDDEN
+# file flag set, and CPython's site.addpackage() silently SKIPS hidden .pth files.
+# The result is a package that `pip show` reports as installed but that fails to
+# import, with no error anywhere. Clear it with:
+#     chflags nohidden .venv/lib/python3.12/site-packages/__editable__*.pth
+# This block makes the console work regardless. It is a no-op on a healthy install.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-from policyguard.audit import audit_log
-from policyguard.policy import policy_store
-from policyguard.types import AuditEntry
+import chainlit as cl  # noqa: E402  (import after the sys.path fix above)
+
+from policyguard.audit import audit_log  # noqa: E402
+from policyguard.policy import policy_store  # noqa: E402
+from policyguard.types import AuditEntry  # noqa: E402
 
 POLICY_PATH = "policy/devassist.yaml"
 

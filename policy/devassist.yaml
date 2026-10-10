@@ -64,3 +64,25 @@ suspicious_param_names:
   - attachment
   - env
   - config
+
+# ── Added for the Investigator (layer 2) ──────────────────────────────────
+# Decision thresholds. The mandate and every threshold live here, in the
+# policy; purely operational knobs live in config/policyguard.yaml.
+thresholds:
+  gate_low: 0.20                  # score <= this  -> allow without investigating
+  gate_high: 0.80                 # score >= this  -> block without investigating
+  investigator_min_confidence: 0.70  # ALLOW needs a grounded report at or above this
+  max_steps: 6                    # hard ceiling on Investigator reason/tool turns
+
+# Hosts the agent may send data to. Read by tools.check_destination.
+trusted_hosts:
+  - github.com
+  - api.github.com
+  - internal.devassist.local
+
+# Third-party destinations. Anything sent here is screened, and a secret or
+# canary reaching one of these can never be allowed.
+untrusted_servers:
+  - docs-helper.example.com
+  - paste.example.com
+  - webhook.site
