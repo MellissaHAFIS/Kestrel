@@ -1,66 +1,96 @@
-# PolicyGuard — Hackathon Project Plan (v2)
+# PolicyGuard — Hackathon Project Plan (v3, aligned with the organizers' Track 2 brief)
 
 **Event:** Secure Horizons (UTOPIA × KRYPTOSPHERE × ESSEC MetaLab), ESSEC Cergy, Oct 10–11, 2026, 36h
-**Track:** 2 — Defenders Augmented (AI for cybersecurity + securing AI)
+**Track:** 2 — Defenders Augmented (AI for security & secure AI)
 **Jury:** GitGuardian · ESSEC MetaLab · KPMG
 **Working name:** PolicyGuard (the guard) protecting DevAssist (the target agent)
 
-**What changed in v2**
+**What changed in v3**
 
-- Added a **hybrid gate** in front of the Investigator: a few hard invariants (plain code) + a small fixed-weight ML model.
-- New **evaluation variants** (R, M, A, I, H) and a robustness test.
-- New **train/test split rule** to keep the generalization claim honest.
-- **Avalanche / blockchain dropped for now** (parked, see section 11).
+- Added **section 0**: the organizers' brief and scoring grid, mapped to the plan.
+- **Positioning:** PolicyGuard is explicitly *not* a prompt filter. The headline is now MCP tool-poisoning defense + chain-level supervision of tool calls + grounded investigation for the human analyst.
+- **Demo changed (recommended, to confirm):** an MCP tool-poisoning chain instead of a poisoned README.
+- **New components:** tool registry scanner, provenance (source) tags, analyst console, a dedicated "human control" section.
+- **ML gate demoted** to a cheap fast path. Fine-tuning is the first thing to cut.
+- **Evaluation extended** with tool-poisoning tests and reliability / analyst-value metrics.
+- Avalanche stays parked.
+
+---
+
+## 0. What the organizers said (Track 2 slides)
+
+**The brief**
+
+- "AI can make every analyst ten times more effective, if it can be trusted. And the AI agents deployed in companies need watching too."
+- **What wins:** "Another prompt filter won't impress the jury: Lakera and Prompt Security were acquired in 2025. Go deeper."
+- **SOCs under pressure:** a copilot that hallucinates is worse than none. Reliability is the challenge: *uncertainty scores, source checks, human in the loop*.
+- **AI agents without supervision:** agents plan and call tools, often via MCP. Malicious instructions can hide in a tool description ("tool poisoning"). OWASP ranks goal hijack and tool misuse first.
+- **Identities and data out of control:** most agents run with over-privileged accounts and nobody knows which exist. EchoLeak showed one booby-trapped e-mail could exfiltrate data with no click needed.
+- **Deliverables on top of the common ones:** a working PoC, defensive metrics, and "how the human stays in control".
+
+**Scoring grid, mapped to the plan**
+
+| Criterion | Weight | What we do | Evidence we show |
+|---|---|---|---|
+| **Defensive effectiveness** | 30% | Layered defense (registry scan → hard invariants → ML gate → Investigator) against MCP tool poisoning and multi-step exfiltration | Attack success rate with vs. without guard; recall / FPR / benign utility; held-out tests; obfuscation robustness; variants R/M/A/I/H |
+| **Operational value for the analyst** | 20% | Analyst console: a short prioritized incident queue, a grounded incident report per escalation, one-click approve / block; most actions resolved automatically so analysts don't drown in alerts | Escalations per 100 actions; share of actions auto-resolved; incident report with evidence links; comparison with the one-shot judge |
+| **AI reliability & control** | 20% | Uncertainty scores (gate score, Investigator confidence), source checks (provenance tags + evidence from tools), human in the loop, hard invariants the AI can't override | Calibration plot / ECE; groundedness rate of reports; reproducibility check; the human-control slide |
+| **Technical integration** | 15% | MCP-native (tool-call wrapper + tool registry scan), LangChain / LangGraph middleware, secret scanning tools, SIEM-friendly JSON export | Works against a real MCP server; integration in a few lines of code |
+| **Pitch & demo** | 15% | One clear story, live before/after, a visible human-control moment | Rehearsed 4-minute demo |
+
+Two consequences drive the rest of this plan:
+
+1. A prompt-injection classifier is a prompt filter. It can stay as a fast path, but it cannot be the contribution.
+2. The "analyst" is a **security analyst supervising agents**. The Investigator is effectively a SOC copilot for agent incidents, so it must be reliable: every claim it makes must be backed by a tool observation.
 
 ---
 
 ## 1. WHAT am I building?
 
-**One sentence:** a layered security system that supervises an AI agent in real time and answers the question nobody can answer today:
+**One sentence:** a security layer that supervises AI agents' tool use in real time (including the MCP tool supply chain), decides automatically when it can, and hands a *grounded, uncertainty-scored* case to a human analyst when it can't.
 
-> "Is this agent doing exactly what we asked it to do, and nothing else?"
+> The question it answers: "Is this agent doing exactly what we asked it to do, and nothing else, and can a human prove and control it?"
 
-Three components, clearly separated:
-
-| | **DevAssist** (protected agent) | **Hybrid gate** (fast path) | **Investigator** (agent) |
-|---|---|---|---|
-| Role | Developer assistant deployed in a company | Scores every intercepted action in milliseconds | Investigates only the ambiguous actions |
-| Nature | Agentic (tools, loop) | Not agentic, on purpose: no LLM call, fixed weights | Agentic (reason → act → observe loop) |
-| Why it exists | Something realistic to attack and defend | Speed, reproducibility, resistance to injection | Catches multi-step chains and gives explanations |
+| Component | Role | Nature |
+|---|---|---|
+| **DevAssist** | The protected agent: a developer assistant using MCP tools (files, PRs, docs search, notifications) | Agentic (tools, loop) |
+| **Tool registry scanner** | At MCP connection time, scans tool descriptions and schemas for poisoning, pins their hashes, quarantines suspicious tools | Deterministic rules + ML score |
+| **Hybrid gate** | Scores every intercepted action in milliseconds: hard invariants, then a small fixed-weight ML model | Not agentic, on purpose |
+| **Investigator** | Investigates only the uncertain cases with tools; outputs a grounded verdict with confidence | Agentic (reason → act → observe loop) |
+| **Analyst console** | Chainlit UI: incident queue, evidence, approve / block, session kill switch, audit log | Human control |
 
 **What PolicyGuard does**
 
-1. **Defines** the agent's mandate as a natural-language policy (YAML): "never read `.env`", "no POST to non-allowlisted domains", "no credentials in code".
-2. **Intercepts** every input, tool call and output of the target agent (LangChain callbacks / LangGraph middleware).
-3. **Gates** each action: hard invariants first, then an ML score.
-4. **Investigates** the uncertain band with a tool-using agent instead of a one-shot LLM guess.
-5. **Acts**: allow, block, sanitize, or escalate to a human (`interrupt()`).
-6. **Logs** everything to an exportable audit trail, including which layer decided.
+1. **Defines** the agent's mandate as a natural-language policy (YAML): allowed tools, sensitive paths, trusted destinations, what needs approval.
+2. **Checks the tool supply chain:** MCP tool descriptions are untrusted input; scan them, pin them, quarantine suspicious ones.
+3. **Intercepts** every input, tool call and output of the agent, and tags content by **source** (user, internal repo, third-party tool description, tool result).
+4. **Gates** each action with hard invariants and an ML score.
+5. **Investigates** the uncertain band with a tool-using agent.
+6. **Acts:** allow, block, sanitize, quarantine a tool, or escalate to a human (`interrupt()`).
+7. **Logs** everything, including which layer decided and why.
 
-**Integration story:** drop-in Python middleware for any LangChain / LangGraph agent, in a few lines of code and without rewriting the agent. Limits: non-Python agents and closed vendor agents are not covered by this version.
+**Integration story:** drop-in Python middleware for LangChain / LangGraph agents, with MCP tools wrapped at the tool-call layer. Limits: non-Python agents, closed vendor agents, and a full network-level MCP gateway are not in this version.
 
-**Terminology rule (important for the jury):** only the hard invariants are *deterministic with a guarantee*. The ML gate is *fixed-weight and reproducible* (same input → same score), not guaranteed. Never call the ML gate "deterministic".
+**Terminology rule:** only the hard invariants are *deterministic with a guarantee*. The ML gate is *fixed-weight and reproducible*, not guaranteed. Don't call the ML gate "deterministic".
 
 ---
 
 ## 2. WHY this idea?
 
-**The problem:** agents already run in production with real access (files, APIs, email, code). Their failures are *behavioral drift*, not classic intrusions:
+**The problem:** agents already run in production with real access (files, APIs, email, code), often through MCP servers written by third parties. Their failures are *behavioral*, not classic intrusions:
 
-- Each individual action looks legitimate (legitimate agent, legitimate access, legitimate text).
-- The danger is in the **chain**: read secret → paste it into code → POST it somewhere external.
-- Classic tools (firewall, antivirus, SIEM, DLP) look at packets, signatures, logs and files. They don't understand *what the agent is trying to do*.
+- A **tool description** can carry hidden instructions (tool poisoning). The agent follows them because they look like part of the tool's documentation.
+- Each individual action looks legitimate (legitimate agent, legitimate access, legitimate text). The danger is in the **chain**: read a secret → pass it as a "context" parameter → it leaves for a third party.
+- Goal hijack and tool misuse are the top risks in OWASP's agent ranking (verify exact names).
+- Agents often run with over-privileged accounts, and nobody has an inventory of what they can do.
+- Real precedent: EchoLeak (a booby-trapped e-mail exfiltrating data with no click).
+- Classic tools (firewall, antivirus, SIEM, DLP) don't understand *what the agent is trying to do*.
 
-**Why LLM-only guards are not enough:** LLM judges aren't 100% reproducible even at temperature 0, they are slow and costly on every action, and the content they inspect can contain injections aimed at them. Hence the layered design: guarantees from code, generalization from a small model, judgment from an agent only where needed.
+**Why not "another prompt filter":** per the organizers, that space has already consolidated. A prompt filter inspects text going into one model. PolicyGuard supervises the *actions* of an agent across a tool chain, including the tool supply chain, with provenance, privilege awareness, evidence-grounded investigation and human control.
 
-**Why now:**
+**Why layers:** guarantees from code, generalization from a small model, judgment from an agent only where needed. LLM judges alone aren't reproducible, are slow and costly on every action, and can be attacked by the content they inspect.
 
-- Agent deployment is ahead of agent security tooling.
-- Indirect prompt injection against tool-using agents is documented in the research literature (see benchmarks).
-- Regulation (EU AI Act, NIS2, DORA) pushes toward auditability of AI systems in production.
-- The event pitch itself is about agents doing things nobody told them to do.
-
-**Honest positioning:** guardrail tools already exist (Guardrails AI, NeMo Guardrails, Lakera Guard, Rebuff, LangSmith for observability). Our differentiation is the **combination**: natural-language policy + tool-call interception + layered gate + investigating agent + enforcement + audit trail, evaluated on public benchmarks. Don't claim "nobody has done this". Claim "we focus on multi-step behavioral drift of tool-using agents".
+**Honest positioning:** guardrail tools exist (Guardrails AI, NeMo Guardrails, LangSmith for observability, and the acquired prompt-security vendors). Our differentiation is the **combination**: MCP tool-supply-chain scanning + provenance + layered gate + grounded Investigator + analyst console, evaluated on public and custom tests. Don't claim "nobody has done this"; claim a specific focus: *multi-step behavioral drift and tool poisoning in tool-using agents*.
 
 ---
 
@@ -68,63 +98,85 @@ Three components, clearly separated:
 
 | Stakeholder | Why they care |
 |---|---|
-| **GitGuardian** | Natural extension of "secrets in code" to "secrets and dangerous behavior in agents that read and write code". Secret scan and canary tools are in their domain. |
-| **KPMG** | Their clients deploy agents and need controls and an audit trail for AI governance and compliance. |
-| **ESSEC MetaLab** | Visible governance: explicit policy, human-in-the-loop, explainable decisions, audit log, reproducible gate. |
-| **Any company with agents in production** | A reusable security layer: pip-installable, framework-native. |
+| **GitGuardian** | Secrets leaving through agents and tool calls is their domain: our secret scan and canary tools extend "secrets in code" to "secrets in agent behavior". |
+| **KPMG** | Clients deploy agents and need controls, an audit trail, and human oversight for AI governance and compliance. |
+| **ESSEC MetaLab** | Visible governance: explicit policy, human control, explainable and reproducible decisions. |
+| **Security analysts / SOCs** | A short queue of grounded, prioritized agent incidents instead of raw logs. |
+| **Any company with agents + MCP tools** | A reusable layer to vet tools and supervise agents. |
 
-**What the jury should remember:** "They built a security layer designed natively for AI agents, with hard guarantees where they matter, learned generalization where it helps, and an investigator for the hard cases. And they measured it on public benchmarks."
+**What the jury should remember:** "They didn't build another prompt filter. They secured the tool layer of agents, measured it, and showed exactly how the human stays in control."
 
-**Possible continuation (mention, don't overclaim):** open-source core, enterprise features later (hosted dashboard, multi-agent management, compliance reports); partnership or incubation with jury companies.
+**Possible continuation (mention, don't overclaim):** open-source core, enterprise features later (hosted console, multi-agent inventory, compliance reports); partnership with jury companies.
 
 ---
 
 ## 4. HOW — Architecture
 
 ```
-User ─► [Input guard] ─► DevAssist (LLM + tools) ─► [Output guard] ─► Out
-                              │
-                         [Tool guard]  (every tool call is intercepted)
-                              ▼
+MCP servers (internal + third-party)
+   │  tool descriptions + results = UNTRUSTED
+   ▼
+[R] TOOL REGISTRY SCAN (at connection time)
+    scan descriptions/schemas · pin hashes · quarantine suspicious tools
+   ▼
+User ─► DevAssist (LangGraph) ─► tool calls ─► MCP servers
+            │  every input / tool call / output is intercepted
+            │  and tagged with its SOURCE (provenance)
+            ▼
 ┌──────────────────────── PolicyGuard ─────────────────────────┐
 │ 1a. HARD INVARIANTS (plain code, guaranteed)                 │
-│     canary match · path deny-list · tool-arg schema checks   │
-│     → violation = final BLOCK (nothing can override it)      │
+│     canary/secret in outgoing args · sensitive-path deny-list│
+│     · unexpected tool parameters · schema validation         │
+│     → violation = final BLOCK (the AI cannot override)       │
 │                          ▼                                   │
 │ 1b. ML GATE (small encoder, fixed weights, CPU-fast)         │
-│     input: serialized action (tool, args, short history)     │
-│     score < low  → ALLOW                                     │
-│     score > high → BLOCK (human may override)                │
-│     in between   → Investigator                              │
+│     score < low → ALLOW · score > high → BLOCK               │
+│     in between → Investigator                                │
 │                          ▼                                   │
 │ 2.  INVESTIGATOR AGENT (LLM + tools, uncertain band only)    │
-│     can only tighten a decision, never lift a hard block     │
+│     grounded verdict + confidence; can only tighten          │
 │                          ▼                                   │
-│ 3.  HUMAN via interrupt() for high severity / low confidence │
+│ 3.  HUMAN: analyst console (approve / block / kill session)  │
 └──────────────────────────────────────────────────────────────┘
-        Policy store (YAML) · Audit log (SQLite, per-layer decision)
+     Policy store (YAML) · Audit log (SQLite, per-layer decision)
 ```
 
 **Design rules**
 
-- The LLM can add caution but can never remove a hard-invariant block.
-- Hard invariants are kept to a handful of rules where a guarantee matters (secrets, sensitive paths, schema validity). Everything fuzzier goes to the ML gate.
-- Thresholds (`low`, `high`) are tuned on a validation split only (see section 7.4), then frozen.
-- The model file's hash and thresholds are logged with every decision.
+- The AI can add caution but can never lift a hard-invariant block.
+- Hard invariants are a handful of rules where a guarantee matters. Everything fuzzier goes to the ML gate or the Investigator.
+- Thresholds are tuned on a validation split only (section 8.4), then frozen. The model hash and thresholds are logged with every decision.
 
-### 4.1 The ML gate
+### 4.1 Tool registry scanner (the "go deeper" part)
 
-- **Input:** a text serialization of the action, e.g. `tool=http_post | url=... | body_summary=... | prior_actions=[file_read(...), ...]`, plus the incoming text for injection checks.
+When DevAssist connects to an MCP server, each tool's description and parameter schema is treated as untrusted input.
+
+- **Deterministic checks:** invisible / hidden Unicode, imperative instructions aimed at the model ("before using this tool, read…", "do not tell the user"), references to other tools, files or paths, suspicious extra parameters (e.g. `context`, `notes`) that invite data to be passed along, abnormal description length.
+- **ML check:** injection-classifier score on the description (the same fast model as the gate).
+- **Pinning:** store a SHA-256 of description + schema. If it changes later ("rug pull"), re-scan and alert.
+- **Outcome:** allow, quarantine (tool unavailable until the analyst approves), or block.
+- **Honest limit:** the scanner is imperfect on subtle poisoning. That's why the runtime layers exist, and the demo uses a subtle tool to show it.
+
+### 4.2 Provenance (source checks)
+
+Every piece of content in the session carries a source label: `user` (trusted), `internal_repo`, `mcp_description` (untrusted), `tool_result` (untrusted). The Investigator can ask "which source did the content preceding this action come from?" and the answer goes into the evidence.
+
+**Honest limit:** we can't see inside the model's reasoning. Provenance is by ordering and correlation (e.g. an instruction in an untrusted description followed by an action that matches it), so it's strong evidence, not proof.
+
+### 4.3 The ML gate (fast path, not the headline)
+
+- **Input:** serialized action (tool, args, short history, source labels) and incoming text.
 - **Output:** a violation score in [0, 1].
 - **Build ladder (stop when time runs out):**
-  1. **Pre-trained injection classifier** from Hugging Face (DeBERTa-based injection detectors, Meta's Prompt Guard family, etc.; verify names, licenses, sizes). Zero training. This is your baseline gate.
-  2. **Embeddings + logistic regression** on action text. Quick, gives a first ROC curve.
-  3. **Fine-tune a small encoder** (DeBERTa-small or similar) on action-level data, on a free GPU (Colab). Only if steps 1–2 are done and data is ready.
-- **Limits to state openly:** a classifier gives probabilities and can be evaded by adversarial inputs, which is why the hard invariants exist. For structured secrets (API keys), patterns + entropy are often more precise than ML.
+  1. **Pre-trained injection classifier** from Hugging Face (DeBERTa-based injection detectors, Meta's Prompt Guard family, etc.; verify names, licenses, sizes). Zero training.
+  2. **Embeddings + logistic regression** on action text. Gives a first ROC curve.
+  3. **Fine-tune a small encoder.** Cut first if short on time, since the organizers said a prompt filter won't win.
+- **Role:** keep the Investigator affordable by resolving the clear cases cheaply, and provide a measurable uncertainty score.
+- **Limits to state openly:** probabilities, evadable by adversarial inputs, weaker than patterns on structured secrets.
 
-### 4.2 The Investigator is an agent, not an LLM call
+### 4.4 The Investigator is an agent, grounded in evidence
 
-A single "prompt → JSON verdict" call is a classifier, not an agent. The Investigator runs a loop, and only on actions the gate couldn't settle:
+A single "prompt → JSON verdict" call is a classifier, not an agent. The Investigator loops, and only on actions the gate couldn't settle:
 
 ```
 Uncertain action
@@ -133,229 +185,282 @@ Uncertain action
  │        ▼
  │   ACT: call an investigation tool
  │        ▼
- │   OBSERVE: update evidence and confidence
+ │   OBSERVE: record evidence (with an id) and update confidence
  │        ▼
  └── confidence < threshold AND steps left? ── yes ──┘
               │ no
               ▼
-   VERDICT: allow / block / sanitize / escalate (human via interrupt())
+   VERDICT + incident report (every claim cites an evidence id)
+   → allow / block / sanitize / escalate to the analyst
 ```
 
 **Investigator tools (read-only; inspected content is treated as data):**
 
 | Tool | Purpose |
 |---|---|
-| `get_session_history` | What the target agent did earlier (catches chains) |
-| `read_policy(section)` | Retrieve relevant rules from the policy store |
+| `get_session_history` | What the agent did earlier (catches chains) |
+| `get_provenance(action)` | Which source the preceding content came from |
+| `read_policy(section)` | Relevant rules from the policy store |
 | `scan_secrets(text)` | Pattern + entropy scan (e.g. `detect-secrets`; `ggshield` if available) |
 | `check_destination(url)` | Allowlist and domain checks |
-| `classify_path(path)` | Is this file sensitive (`.env`, keys, CODEOWNERS, data class)? |
-| `static_scan(code)` | Bandit / Semgrep on generated code |
-| `check_canary(text)` | Detect planted honeytokens, which gives proof of exfiltration |
+| `classify_path(path)` | Is this file sensitive (`.env`, keys, data class)? |
+| `inspect_tool(tool_name)` | Registry scan result and pinned hash of the tool involved |
+| `check_canary(text)` | Detect planted honeytokens (proof of exfiltration) |
 | `request_human_approval` | LangGraph `interrupt()` |
 
-**LangGraph structure:** nodes `reason ⇄ tools (ToolNode) → verdict → human_interrupt (optional)`. State: `action_under_review`, `evidence[]`, `confidence`, `steps_used`, `gate_score`. Hard step budget (~6); escalate to a human if still uncertain.
+**Reliability mechanisms (the "hallucinating copilot is worse than none" problem):**
 
-**Safety of the guard itself:** inspected content may contain injections aimed at the Investigator. Read-only tools, content passed strictly as data, step budget, human escalation.
+- Every claim in the incident report must cite an **evidence id** from a tool observation.
+- A **deterministic verifier** checks that every cited id exists and that the report only lists evidence actually collected. Reports failing the check are marked "unverified" and escalated.
+- The verdict carries a **confidence** value, and below a threshold the Investigator **abstains** and escalates.
+- Hard step budget (~6), read-only tools.
 
-### 4.3 The 5 agentic criteria
+**LangGraph structure:** nodes `reason ⇄ tools (ToolNode) → verify → verdict → human_interrupt (optional)`. State: `action_under_review`, `evidence[]`, `confidence`, `steps_used`, `gate_score`, `sources`.
+
+### 4.5 The 5 agentic criteria
 
 Litmus test: *can I answer in one shot, without looking anything up or changing anything?* No → agent.
 
 | # | Criterion | DevAssist | Investigator |
 |---|---|---|---|
-| 1 | Live / external data via tools | files, repo, HTTP, search | session history, policy retrieval, scanners, destination lookup |
-| 2 | Actions in the world | open PRs, send notifications, POST | block, sanitize, quarantine, escalate to human |
+| 1 | Live / external data via tools | MCP tools: files, repo, docs search, HTTP | session history, provenance, scanners, destination lookup, tool registry |
+| 2 | Actions in the world | open PRs, send notifications, call tools | block, sanitize, quarantine a tool, escalate to a human |
 | 3 | Number of steps unknown ahead | depends on the task | 1 to ~6 depending on the evidence |
-| 4 | Reacts to results | adapts to file contents | next tool depends on the last observation |
-| 5 | Constraint met by iteration | finish the coding task | reach confidence ≥ threshold within step and latency budget, else escalate |
+| 4 | Reacts to results | adapts to tool results | the next tool depends on the last observation |
+| 5 | Constraint met by iteration | finish the coding task | reach confidence ≥ threshold within the step and latency budget, else escalate |
 
-The hybrid gate is deliberately **not** agentic. It is the fast path. The agentic claim rests on DevAssist and the Investigator, and the gate is what keeps the Investigator affordable.
+The registry scanner and the ML gate are deliberately **not** agentic. They're the fast path that keeps the agentic Investigator affordable.
 
 ---
 
-## 5. HOW — Stack
+## 5. How the human stays in control (required deliverable)
+
+| Decision | Who decides | Mechanism |
+|---|---|---|
+| What the agent may do (policy) | Human security owner | YAML policy, versioned; the AI may suggest changes but never applies them |
+| Which MCP tools are trusted | Human analyst | New or changed tools are quarantined until approved; hashes pinned |
+| Hard-invariant violations | Automatic block | The AI cannot override. Only a human editing the policy lifts a rule, and that change is logged |
+| ML-gate blocks | Automatic, human can override | Analyst override requires a logged reason |
+| Ambiguous or high-severity actions | Investigator recommends, **human decides** | `interrupt()` pauses the agent until the analyst approves or blocks |
+| Low-risk actions | Autonomous | Fully logged and reviewable |
+| Emergency stop | Human | Session kill switch in the console |
+| Accountability | Everyone | Audit trail with per-layer decision, reasoning, model hash, thresholds |
+
+Principle for the slide: **AI proposes, rules guarantee, humans decide.**
+
+---
+
+## 6. HOW — Stack
 
 | Layer | Choice |
 |---|---|
 | Agent framework | LangGraph + LangChain (tools, callbacks / middleware, `interrupt()`) |
+| MCP | Python MCP SDK (FastMCP) to build a legit and a poisoned test server; `langchain-mcp-adapters` to load MCP tools into LangGraph (verify both) |
 | LLMs | Small fast model for DevAssist; stronger model for the Investigator; `temperature=0` (check which models/credits the event provides) |
-| Interception | LangChain callbacks (`on_llm_start`, `on_tool_start`, `on_llm_end`) and/or LangGraph middleware |
-| ML gate | Hugging Face `transformers` + PyTorch (inference on CPU), scikit-learn for the logistic-regression baseline; Colab for optional fine-tuning |
-| Hard invariants | Plain Python (path rules, canary match, schema validation) |
-| Policy store | YAML / JSON, retrieved by section (no vector DB needed for the demo) |
-| Security tools | `detect-secrets`, Bandit or Semgrep, allowlist logic |
-| Audit log | SQLite |
-| UI / demo | Chainlit (live feed + Approve / Block buttons) |
+| Interception | Wrap MCP tools at the tool-call layer + LangChain callbacks |
+| ML gate | Hugging Face `transformers` + PyTorch (CPU inference), scikit-learn for the logistic-regression baseline |
+| Hard invariants | Plain Python (path rules, canary / secret match, schema checks) |
+| Policy store | YAML / JSON |
+| Security tools | `detect-secrets` (and `ggshield` if available), Bandit or Semgrep (bonus), allowlist logic |
+| Audit log | SQLite, with JSON export in a SIEM-friendly shape |
+| UI / demo | Chainlit analyst console |
 | Tracing | LangSmith |
-| Evaluation | Python + scikit-learn metrics; optional DeepEval / Giskard (verify, see section 10) |
+| Evaluation | Python + scikit-learn; optional DeepEval / Giskard (verify) |
 
 ---
 
-## 6. HOW — Observability
+## 7. HOW — Observability and the analyst console
 
-**Level 1 — Live trace (shown during the demo).** One line per event in Chainlit, showing *which layer decided*:
+**Analyst console (Chainlit)**
 
-```
-[10:42:01] INPUT      "Finish the auth module"            ALLOW   (gate 0.03)
-[10:42:03] TOOL CALL  file_read("/src/auth/.env")         BLOCK   (hard invariant: path deny-list)
-[10:42:04] INPUT      third-party README text             BLOCK   (gate 0.97, injection)
-[10:42:05] TOOL CALL  http_post(docs-endpoint, body=...)  INVESTIGATE (gate 0.55) → steps: 3 → ESCALATE
-```
-
-**Level 2 — Investigation trace.** Tools called, observations, confidence progression, final reasoning. This visibly proves the loop.
-
-**Level 3 — Gate telemetry.** Score per action, thresholds in force, model hash, share of actions resolved at each layer (invariants / ML gate / Investigator / human).
-
-**Level 4 — Audit trail (exportable JSON/CSV).**
+- **Incident queue:** only escalations, sorted by severity and uncertainty.
+- **Incident card:** what happened, the evidence list (each item linked to its tool observation), provenance of the triggering content, gate score, Investigator confidence and **uncertainty**, recommended action, Approve / Block buttons.
+- **Tool registry view:** MCP tools with status (trusted / quarantined), scan result, pinned hash.
+- **Session controls:** kill switch.
+- **Live feed:** one line per event showing which layer decided.
 
 ```
-session_id | timestamp | event_type | action | layer | gate_score | model_hash | evidence |
-violation | severity | reasoning | decision | steps_used | latency_ms
+[10:42:00] REGISTRY   docs_helper.search            QUARANTINE (hidden instruction in description)
+[10:42:03] TOOL CALL  file_read("config/settings")  ALLOW      (gate 0.12)
+[10:42:04] TOOL CALL  notes_helper.save(context=…)  INVESTIGATE (gate 0.55) → 3 steps → ESCALATE (conf 0.91)
+[10:42:05] ANALYST    Block                          logged with reason
+```
+
+**Audit trail (exportable JSON/CSV)**
+
+```
+session_id | timestamp | event_type | action | source_labels | layer | gate_score | model_hash |
+evidence_ids | violation | severity | confidence | reasoning | decision | decided_by | steps_used | latency_ms
 ```
 
 LangSmith holds low-level traces of LLM and tool calls; SQLite is the compliance-facing record.
 
 ---
 
-## 7. HOW — Evaluation
+## 8. HOW — Evaluation
 
-**Principle:** don't rely on a home-made benchmark alone (biased and slow to build). Use public benchmarks and frameworks, compare variants, and keep train and test strictly separate.
+**Principle:** use public benchmarks where they fit, add a small custom set where they don't (and say so), compare variants, report reliability and analyst-value metrics, and keep train and test strictly separate.
 
-### 7.1 Benchmarks
+### 8.1 Benchmarks and test sets
 
-| Benchmark | What it tests | Role |
+| Set | What it tests | Role |
 |---|---|---|
-| **InjecAgent** (Zhan et al., 2024, ~1,054 cases) | Indirect prompt injection against tool-integrated agents (direct harm, data exfiltration) | Primary source; may supply training / validation data |
-| **AgentDojo** (ETH Zurich) | Dynamic agent environments with utility and security metrics | Held-out test: does the guard stop attacks while the agent still completes tasks? |
-| **R-Judge** (2024, ~569 agent interaction records) | Whether a judge recognizes safety risks in agent trajectories | Held-out test for the Investigator as a judge |
-| **Small custom multi-step set (~10 chains)** | Read-secret → leak chains, mandate violations | Supplement only (public benchmarks are mostly single-step). State this bias. |
+| **InjecAgent** (Zhan et al., 2024, ~1,054 cases) | Indirect prompt injection against tool-integrated agents | Source for training / validation; also a sanity check |
+| **AgentDojo** (ETH Zurich) | Dynamic agent environments with utility and security metrics | Held-out test: security while keeping task utility |
+| **R-Judge** (2024, ~569 records) | Whether a judge recognizes safety risks in agent trajectories | Held-out test for the Investigator as a judge |
+| **MCP tool-poisoning benchmark** (e.g. MCPTox; verify it exists and is usable) | Poisoned MCP tool descriptions | Held-out test for the registry scanner |
+| **Custom tool-description set** (~30 poisoned variants + ~30 benign real-world descriptions) | Registry scanner precision / recall | Fallback if the benchmark isn't usable. State the bias. |
+| **Custom multi-step chains (~10)** | Read-secret → leak chains through MCP tools | Supplement only; public benchmarks are mostly single-step |
 
-### 7.2 Variants compared
+Use a representative subset (a few hundred cases), chosen *before* tuning.
+
+### 8.2 Variants compared
 
 | Variant | Description | Question it answers |
 |---|---|---|
-| **0. No guard** | DevAssist alone | What's the baseline attack success rate? |
+| **0. No guard** | DevAssist alone | Baseline attack success rate |
 | **R. Rules only** | Regex / deny-list gate | How far does hand-written logic go? |
 | **M. ML gate only** | Fixed-weight model, thresholds tuned on validation | Does learning generalize better than rules? |
 | **A. One-shot LLM judge** | One LLM verdict per action | The plain "LLM call" baseline |
-| **I. Investigator only** | Agent loop on every action, no gate | Does the loop beat one-shot (A vs I)? Cost of no gate? |
-| **H. Hybrid (full system)** | Invariants + ML gate + Investigator + human | Is the combination best on accuracy, cost and latency? |
+| **I. Investigator only** | Agent loop on every action, no gate | Does the loop beat one-shot (A vs I)? |
+| **H. Hybrid (full system)** | Registry scan + invariants + ML gate + Investigator + human | Is the combination best on accuracy, cost, latency and analyst load? |
 
-Key comparisons: **R vs M** (generalization), **A vs I** (agentic loop), **M vs H** (value of the Investigator), **I vs H** (value of the gate: cost and latency). If a hypothesis fails, report it honestly and say what the component still adds (explanations, guarantees, speed).
+Key comparisons: **R vs M** (generalization), **A vs I** (agentic loop), **M vs H** (value of the Investigator), **I vs H** (value of the gate in cost and latency). If a hypothesis fails, report it and say what the component still adds.
 
-### 7.3 Metrics
+### 8.3 Metrics, grouped by scoring criterion
 
-- **Attack success rate (ASR):** baseline vs. guarded (the delta is the impact)
-- **Detection recall** on attacks, **false positive rate** on benign cases, precision, F1
-- **ROC-AUC and PR-AUC** for the ML gate (the measurability argument), with the operating point chosen on validation
-- **Benign utility:** % of legitimate tasks still completed (a guard that blocks everything is useless)
-- **Latency overhead** per action, in ms on CPU for the gate, and for the Investigator path
-- **Share of actions resolved at each layer**, **average tool calls per Investigator verdict**, **cost per action**
-- **Reproducibility check:** run the gate twice on the same inputs and report identical outputs (and the same for hard invariants)
-- **Robustness test:** take attacks the regex catches, obfuscate them (paraphrase, encoding, typos, split across tool calls), and compare R vs M vs H on the obfuscated set
-- Report a confusion matrix and per-category results (injection, exfiltration, mandate violation)
+**Defensive effectiveness (30%)**
+- Attack success rate (ASR), baseline vs. guarded
+- Recall on attacks, false positive rate, precision, F1
+- **Benign utility:** % of legitimate tasks still completed
+- Registry scanner: precision / recall on poisoned vs. benign descriptions
+- Robustness: obfuscate attacks that rules catch (paraphrase, encoding, typos, split across calls) and compare R vs M vs H
+- Per-category results (tool poisoning, injection, exfiltration, mandate violation)
 
-All numbers shown to the jury must come from actual runs. No placeholder values.
+**AI reliability & control (20%)**
+- **Calibration** of the gate score and the Investigator confidence (reliability diagram, ECE or Brier score)
+- **Abstention / escalation behavior:** accuracy on the cases the system decides vs. the cases it escalates
+- **Groundedness rate:** % of report claims backed by a collected evidence id (checked by the verifier)
+- **Reproducibility:** run the gate and the hard invariants twice on the same inputs and report identical outputs
+- ROC-AUC / PR-AUC for the ML gate
 
-### 7.4 Train / test split rule
+**Operational value for the analyst (20%)**
+- **Escalations per 100 actions** (alert load), compared with the one-shot judge
+- **Share of actions resolved at each layer**
+- Average tool calls per Investigator verdict, latency (ms) per path, cost per action
+- Incident report completeness (evidence items, provenance present)
 
-This rule exists so that "it generalizes" is a *measured* claim, not a leaked one.
+All numbers shown to the jury must come from actual runs.
 
-1. **Decide the splits before any tuning**, write them down, and don't change them after seeing results.
-2. **Split by source and attack template, not by random rows.** Near-duplicate attacks in train and test inflate scores.
+### 8.4 Train / test split rule
+
+1. **Decide the splits before any tuning**, write them down, don't change them after seeing results.
+2. **Split by source and attack template, not by random rows.** Near-duplicates across splits inflate scores. For tool descriptions, split by *server / template*, not by individual description.
 3. **Three roles:**
-   - *Train:* data used to fit the gate (e.g. a portion of InjecAgent-style cases + synthetic examples).
-   - *Validation:* used only to choose thresholds (`low`, `high`), the best ladder step, and prompts. Held out by attack type from train.
-   - *Test:* **never used for fitting or tuning**, evaluated once for the final numbers. Prefer a different source from train: AgentDojo, R-Judge, and the custom multi-step chains.
+   - *Train:* used to fit the gate (e.g. part of InjecAgent-style cases + synthetic examples).
+   - *Validation:* only for thresholds (`low`, `high`), choosing the ladder step, and prompts. Held out by attack type.
+   - *Test:* never used for fitting or tuning, evaluated once. Prefer a different source from train: AgentDojo, R-Judge, the tool-poisoning set, the custom chains.
 4. **Synthetic (LLM-generated) data is train-only**, hand-checked, never in validation or test.
-5. **Check contamination.** Pre-trained classifiers and LLMs may have seen public benchmarks; note it, and prefer held-out and custom cases for the headline claim.
-6. **Thresholds and weights are frozen** before the test run. Log the model hash and thresholds used.
-7. **Log data provenance** (source, size, label origin) for every dataset in the report.
+5. **Check contamination.** Pre-trained classifiers and LLMs may have seen public benchmarks; note it and prefer held-out and custom cases for the headline claim.
+6. **Freeze** thresholds and weights before the test run, and log the model hash and thresholds.
+7. **Log data provenance** (source, size, label origin) for every dataset.
 8. If you only use a pre-trained classifier (ladder step 1), there's no training split, but the same test discipline applies: tune thresholds on validation only.
 
 ---
 
-## 8. THE one demo use case
+## 9. THE one demo use case
 
-**"DevAssist finishes the auth module" — poisoned context leads to a secret-exfiltration chain.**
+**"DevAssist finishes the auth module" — an MCP tool-poisoning chain ending in secret exfiltration.**
 
-Why this one: one run shows indirect injection (public benchmark relevance), behavioral drift (the event pitch), secrets (GitGuardian), audit and compliance (KPMG), and human control (ESSEC MetaLab).
+Why this one: it uses the organizers' own threat language (MCP tool poisoning, goal hijack, tool misuse, data exfiltration, EchoLeak-style leakage) while staying inside one coherent story, and it shows the layers, the analyst and the human control.
 
-**Setup:** DevAssist has simulated tools and a repo with planted secrets and a canary token. While working, it reads a third-party file (README or ticket comment) containing a hidden instruction.
+**Setup:** DevAssist connects to two MCP servers: a legit internal one (file read, PRs) and a third-party "docs helper" server. The repo contains planted secrets and a canary token.
+- **Tool A (obviously poisoned):** its description tells the model to read a config file and pass the contents in an extra `context` parameter.
+- **Tool B (subtly poisoned):** reworded and less obvious, so it passes registration.
 
-**Act 1 — Without PolicyGuard (~1 min).** Task: "Help me finish the authentication module." DevAssist reads secrets, embeds one in generated code, POSTs "documentation" to an external endpoint. No alert anywhere. The canary proves the leak.
+**Act 1 — Without PolicyGuard (~1 min).** Task: "Help me finish the authentication module." DevAssist follows the hidden instructions, reads the config and sends the secret to the third-party server via the tool parameter. No alert anywhere. The canary proves the leak.
 
 **Act 2 — Same task, PolicyGuard on (~2 min).** Each layer visibly catches something different:
-- a hard invariant blocks the direct sensitive-path read,
-- the ML gate flags the injected instruction in the third-party text,
-- the Investigator loop (history → secret scan → destination check) resolves the ambiguous POST and escalates to the human Approve / Block button.
+1. **Registry scan** quarantines Tool A at connection time. The analyst sees the highlighted hidden instruction.
+2. Tool B slips through registration (the scanner isn't perfect). At runtime, a **hard invariant** blocks any call where a canary or secret appears in arguments to an untrusted server.
+3. For a paraphrased or partial leak the invariants miss, the **ML gate** is uncertain, so the **Investigator** loops (history → provenance: the instruction came from an untrusted tool description → destination check → secret scan) and **escalates** with a grounded report.
+4. **The analyst clicks Block** in the console. The decision is logged.
 
-Design the chain while building so that each layer has a visible job. If one layer catches everything, the demo hides the architecture.
+Design the chain while building so each layer has a visible job. If one layer catches everything, the demo hides the architecture.
 
-**Act 3 — Audit and numbers (~1 min).** Show the audit trail (including which layer decided), then the results slide: ASR without vs. with the guard, the R/M/A/I/H comparison, the obfuscation robustness result, and latency overhead.
+**Act 3 — Audit and numbers (~1 min).** Show the audit trail with per-layer decisions, then the results slide: ASR without vs. with the guard, R/M/A/I/H comparison, calibration, escalations per 100 actions, latency. End on the human-control slide (section 5).
 
-**Bonus (30 seconds, only if time):** vulnerable generated code caught by the static scan, and an out-of-mandate action. No separate demos.
+**Optional 15-second bonus:** a privilege report showing the agent's token has write access to all repos while the task needs read-only, addressing the "over-privileged agents" point. Only if time allows.
+
+*Change from v2: the poisoned README was replaced by MCP tool poisoning to match the organizers' brief. The rest of the chain and the architecture still apply. Confirm or revert.*
 
 ---
 
-## 9. 36-hour plan
+## 10. 36-hour plan
+
+Assumes parallel work across teammates; adjust if you're solo.
 
 | Block | Time | Deliverable |
 |---|---|---|
-| Team formation, policy YAML, scope freeze, split plan | 2h | Agreed scope, roles, dataset splits written down |
-| DevAssist + simulated tools + canary repo | 3h | Attack reproducible without the guard |
-| Interception layer (callbacks / middleware) | 3h | Every action reaches the guard |
-| Hard invariants + ML gate (ladder steps 1–2) | 5h | Gate scoring actions, first ROC curve |
-| Investigator agent (LangGraph + tools) | 5h | Loop works on the demo chain |
-| Audit log + Chainlit dashboard + HITL | 4h | Live demo UI with per-layer decisions |
-| Evaluation harness (variants 0/R/M/A/I/H, benchmarks, robustness test) | 6h | Results table and plots |
-| Slides + demo rehearsal (x3) | 3h | 5 slides, 4-minute script |
-| Buffer (bugs, sleep) | ~5h | |
-| *Optional:* fine-tune the encoder (ladder step 3) | only if ahead | Learned gate on action-level data |
+| Scope freeze, policy YAML, split plan, ask organizers about deliverables | 1.5h | Agreed scope and roles, dataset splits written down |
+| DevAssist + MCP servers (legit + poisoned A/B) + canary repo | 4h | Attack reproducible without the guard |
+| Interception (MCP tool wrapper, callbacks) + provenance tags | 3h | Every action reaches the guard with source labels |
+| Tool registry scanner + hash pinning | 2h | Tool A quarantined |
+| Hard invariants + ML gate (ladder steps 1–2) | 3h | Gate scoring actions, first ROC curve |
+| Investigator (grounded, verifier, confidence) | 5h | Loop works on the demo chain |
+| Analyst console + audit log + HITL + kill switch | 5h | Live demo UI |
+| Evaluation harness (variants, benchmarks, calibration, robustness) | 6h | Results table and plots |
+| Slides + human-control slide + rehearsal (x3) | 3h | 5 slides, 4-minute script |
+| Buffer (bugs, sleep) | ~3.5h | |
+| *Optional:* fine-tune the encoder, privilege report | only if ahead | |
 
-**Cut order if late:** bonus scenarios → fine-tuning (keep the pre-trained classifier or embeddings + LR) → second benchmark → extra telemetry → dashboard polish.
-**Never cut:** the demo chain, the hard invariants, the gate-vs-baseline comparison, the A vs I comparison, the audit log, the train/test discipline.
+**Cut order if late:** privilege report → fine-tuning → bonus scenarios → second benchmark → extra telemetry → dashboard polish.
+**Never cut:** the demo chain, the hard invariants, the registry scan, the analyst console with Approve / Block, the A vs I comparison, the audit log, the human-control slide, the train/test discipline.
 
 ---
 
-## 10. Risks, limits and verification
+## 11. Risks, limits and verification
 
 **Risks and honest limits**
 
-- **ML gate can be evaded** (adversarial inputs) → hard invariants for guarantees, Investigator and human for the rest.
-- **Training data for action-level violations is scarce** → start with pre-trained classifiers; fine-tuning is a stretch goal.
-- **Data leakage / contamination** → split rule in 7.4.
+- **Looking like "another prompt filter"** → lead with tool poisoning, chain supervision and the analyst workflow in all material; the ML gate is the fast path.
+- **Scope creep** (MCP + provenance + console + eval is a lot) → build the demo chain first; use the cut order.
+- **The Investigator can hallucinate** → grounded evidence ids, deterministic verifier, abstain and escalate.
+- **ML gate can be evaded** → hard invariants for guarantees; Investigator and human for the rest.
+- **Registry scanner misses subtle poisoning** → by design; runtime layers exist, and the demo shows this honestly.
+- **Provenance is approximate** (correlation, not proof) → say so.
+- **Training data for action-level violations is scarce** → start with pre-trained classifiers.
+- **Data leakage / contamination** → split rule in 8.4.
 - **Latency and cost of the Investigator** → the gate resolves most actions first; report share per layer.
-- **The Investigator can be attacked** (injections in inspected content) → read-only tools, content as data, step budget.
-- **False positives** make the agent unusable → measure benign utility explicitly.
-- **Wording risk:** calling the ML gate "deterministic" invites a fair challenge. Use "fixed-weight, reproducible".
-- **Scope creep** → one demo chain, one stack.
-- **Integration scope:** Python / LangChain / LangGraph first.
-- **Benchmark fit:** public benchmarks don't perfectly match multi-step chains; say what they do and don't cover.
+- **False positives** make the agent unusable → measure benign utility and analyst alert load.
+- **Wording risk:** don't call the ML gate "deterministic".
+- **Integration scope:** Python / LangChain / LangGraph first; a real MCP gateway proxy is future work.
 
-**Verification checklist before building** (names and details came from memory)
+**Verification checklist before building** (names and details came from memory or from a blurry photo of the slides)
 
-- [ ] InjecAgent: exact paper, repo, license, dataset size, format.
-- [ ] R-Judge: exact paper, repo, number of records and labels.
-- [ ] AgentDojo: repo, how to plug in a defense, which suites to use.
-- [ ] Pre-trained injection classifiers (Hugging Face / Prompt Guard family): exact names, licenses, input length limits, CPU latency, training data (contamination).
-- [ ] DeepEval: which metrics actually exist; fall back to scikit-learn if needed.
-- [ ] Giskard: LangChain / LangGraph support, and whether it's worth the time.
-- [ ] Models and API credits provided by the organizers; GPU access (Colab) if fine-tuning.
+- [ ] **Ask the organizers:** what are the "common deliverables"? Must the demo be live? Is the "analyst" persona a SOC analyst? Any preferred MCP or tooling?
+- [ ] OWASP agent risk ranking: exact list and category names (goal hijack, tool misuse).
+- [ ] EchoLeak: details to cite accurately (vendor, CVE, mechanism).
+- [ ] MCP tool-poisoning benchmark (e.g. MCPTox): exists, license, format, usable offline.
+- [ ] MCP Python SDK and `langchain-mcp-adapters`: current versions and how to wrap tool calls.
+- [ ] InjecAgent, R-Judge, AgentDojo: exact papers, repos, sizes, formats, how to plug in a defense.
+- [ ] Pre-trained injection classifiers (Hugging Face / Prompt Guard family): names, licenses, input length limits, CPU latency, training data (contamination).
+- [ ] DeepEval and Giskard: which features actually exist, LangGraph support, and whether they're worth the time.
+- [ ] Models and API credits provided; GPU access if fine-tuning.
 - [ ] Hackathon rules: reuse of public benchmarks, open-source libraries and pre-built code.
 - [ ] Current products of the jury companies (my knowledge may be outdated).
 
 ---
 
-## 11. Parked ideas
+## 12. Parked ideas
 
-- **Avalanche / blockchain** (dropped for now, maybe later): anchoring the audit-log hash and the active policy hash on-chain for tamper evidence. The hash chain alone already gives most of the tamper evidence. Avalanche only adds an independent timestamp. A wallet-holding agent with on-chain spending limits would fit Track 1, not this project.
-- API-gateway and sidecar integration modes.
+- **Avalanche / blockchain** (dropped for now, maybe later): anchoring the audit-log and policy hashes on-chain for tamper evidence. The hash chain alone gives most of the tamper evidence.
+- A real MCP gateway / sidecar proxy, and an API-gateway mode.
+- Agent inventory across the whole company (the "nobody knows which agents exist" problem).
 - Open-source core + enterprise features.
 
 ---
 
-## 12. 30-second pitch
+## 13. 30-second pitch
 
-> "Companies are deploying AI agents with real access to code, files and APIs, but nobody can verify that an agent is doing only what it was told to do. The danger isn't an obvious attack; it's a chain of individually legitimate actions. PolicyGuard wraps any LangChain or LangGraph agent in layers: hard rules where we need guarantees, a small fixed-weight model that generalizes to reworded attacks, and an investigating agent for the hard cases, with a human in the loop and a full audit trail. We evaluated every layer against public agent-security benchmarks, on data it never saw in training, and it installs in a few lines of code."
+> "Prompt filters are a solved, already-acquired market. The real risk is what agents *do* with their tools: a poisoned MCP tool description can make an agent leak a secret while every single action looks legitimate. PolicyGuard scans and pins the tools an agent can use, tags where every instruction came from, and supervises each action in layers: hard rules for guarantees, a small fixed-weight model for speed, and an investigating agent whose every claim is backed by evidence. When it isn't sure, it doesn't guess: it hands the analyst a short, grounded case with an uncertainty score. We measured every layer on held-out data, with and without the guard, and the human stays in control at every step."
