@@ -111,14 +111,86 @@ def render_chart(res, out_path):
     return out_path
 
 
+
+def render_layers(res, out_path):
+    """Second chart: how each guard layer handled the HARMFUL steps (who caught the attacks).
+
+    Reads variants.H.metrics.layer_decisions.harmful from a results file. Shows, per layer,
+    how many harmful steps it blocked / escalated / allowed. Makes the registry, invariant,
+    gate and Investigator layers visible as a results graphic.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    harmful = (((res or {}).get("variants", {}).get("H", {}).get("metrics", {})
+                .get("layer_decisions", {}) or {}).get("harmful", {}))
+    # Friendly order + labels for the five layers.
+    layer_order = [
+        ("registry", "Registry scan"),
+        ("invariant", "Hard invariants"),
+        ("ml_gate", "ML gate"),
+        ("investigator", "Investigator"),
+        ("human", "Human"),
+    ]
+    BLOCK, ESC, ALLOW = "#2b4cff", "#ff9f1c", "#c62828"
+    rows = []
+    for key, label in layer_order:
+        d = harmful.get(key, {})
+        rows.append((label, int(d.get("block", 0)), int(d.get("escalate", 0)), int(d.get("allow", 0))))
+
+    fig, ax = plt.subplots(figsize=(13.33, 7.5), dpi=150)
+    fig.subplots_adjust(left=0.20, right=0.95, top=0.80, bottom=0.14)
+    ys = range(len(rows))
+    for i, (label, nb, ne, na) in zip(ys, rows):
+        left = 0
+        for val, color in ((nb, BLOCK), (ne, ESC), (na, ALLOW)):
+            if val:
+                ax.barh(i, val, left=left, color=color, height=0.6)
+                ax.text(left + val / 2, i, str(val), ha="center", va="center",
+                        color="white", fontsize=15, fontweight="bold")
+            left += val
+        if left == 0:
+            ax.text(0.1, i, "did not decide any harmful step", va="center", fontsize=12, color="#888")
+    ax.set_yticks(list(ys))
+    ax.set_yticklabels([r[0] for r in rows], fontsize=15)
+    ax.invert_yaxis()
+    ax.set_xlabel("harmful steps handled", fontsize=14)
+    ax.set_title("Which layer stopped the attacks", loc="left", fontsize=24, fontweight="bold", pad=16)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+
+    fig.legend(handles=[Patch(color=BLOCK, label="blocked"), Patch(color=ESC, label="escalated"),
+                        Patch(color=ALLOW, label="allowed (got through)")],
+               loc="upper right", bbox_to_anchor=(0.95, 0.95), frameon=False, fontsize=14, ncol=3)
+
+    stamp = (res or {}).get("stamp", {})
+    counts = (res or {}).get("counts", {})
+    fig.text(0.02, 0.03,
+             f"Harmful steps across {counts.get('attack_chains','?')} attack chains. "
+             f"Investigator: {stamp.get('investigator','?')}. Each layer runs in order; the first to "
+             f"block or escalate stops the step. Small custom set, scripted replay.",
+             fontsize=12, color="#444", wrap=True)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, facecolor="white")
+    plt.close(fig)
+    return out_path
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Render the benchmark chart from a results JSON.")
     ap.add_argument("results", nargs="?", help="results JSON written by eval.run_eval (omit for placeholders)")
     ap.add_argument("--out", default="eval/results/chart.png")
+    ap.add_argument("--layers", action="store_true", help="render the per-layer 'who stopped attacks' chart instead")
     args = ap.parse_args(argv)
     res = json.loads(Path(args.results).read_text(encoding="utf-8")) if args.results else None
     try:
-        path = render_chart(res, args.out)
+        path = (render_layers if args.layers else render_chart)(res, args.out)
     except ModuleNotFoundError as exc:
         print(f"matplotlib is required for the chart ({exc}). Install it with: pip install matplotlib", file=sys.stderr)
         return 2

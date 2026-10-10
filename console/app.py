@@ -37,7 +37,7 @@ POLICY_PATH = "policy/devassist.yaml"
 #: Max escalations shown by `queue`.
 QUEUE_LIMIT = 50
 
-HELP = "Unknown command. Try: `queue` | `log` | `kill` | `approve <id>` | `block <id>`"
+HELP = "Unknown command. Try: `queue` | `tools` | `log` | `kill` | `approve <id>` | `block <id>`"
 
 
 # ── Incident card ──────────────────────────────────────────────────────────
@@ -83,6 +83,7 @@ async def start() -> None:
             f"Commands:\n"
             f"```\n"
             f"queue            — show pending escalations\n"
+            f"tools            — tool registry: which tools are quarantined and why\n"
             f"log              — full session audit log\n"
             f"approve <id>     — approve an escalated action\n"
             f"block <id>       — block an escalated action\n"
@@ -122,6 +123,45 @@ async def _show_log(session_id: str) -> None:
         f"{str(e.timestamp):<26} {e.layer:<13} {e.action[:42]:<42} {e.decision}" for e in entries
     ]
     await cl.Message(content=f"{header}\n```\n" + "\n".join(rows) + "\n```").send()
+
+
+async def _show_tools() -> None:
+    """Registry layer: show every tool's scan status (clean / suspicious / quarantined) and why.
+
+    This is the first PolicyGuard layer. It scans each MCP tool's description and schema at
+    connection time, before the agent is allowed to call it, and quarantines poisoned tools.
+    """
+    try:
+        from policyguard.registry import TOOL_REGISTRY
+    except Exception as exc:  # noqa: BLE001
+        await cl.Message(content=f"Could not load the tool registry: {exc!r}").send()
+        return
+
+    badge = {"quarantined": "QUARANTINED", "suspicious": "suspicious", "clean": "clean"}
+    order = {"quarantined": 0, "suspicious": 1, "clean": 2, "unscanned": 3}
+    names = sorted(TOOL_REGISTRY, key=lambda n: (order.get(TOOL_REGISTRY[n].get("status"), 9), n))
+
+    n_quar = sum(e.get("status") == "quarantined" for e in TOOL_REGISTRY.values())
+    n_susp = sum(e.get("status") == "suspicious" for e in TOOL_REGISTRY.values())
+    header = (
+        f"**Tool registry (layer 1: scan at connection)** - "
+        f"{len(names)} tools, {n_quar} quarantined, {n_susp} suspicious\n"
+    )
+    await cl.Message(content=header).send()
+
+    for name in names:
+        entry = TOOL_REGISTRY[name]
+        status = entry.get("status", "unscanned")
+        findings = entry.get("scan_result", {}).get("findings", [])
+        mark = badge.get(status, status)
+        lines = [f"`{name}` - **{mark}**"]
+        if findings:
+            lines.append("```")
+            lines += [f"- {f}" for f in findings]
+            lines.append("```")
+        else:
+            lines.append("_no suspicious findings_")
+        await cl.Message(content="\n".join(lines)).send()
 
 
 async def _kill(session_id: str) -> None:
@@ -200,6 +240,8 @@ async def handle(message: cl.Message) -> None:
 
     if cmd == "queue":
         await _show_queue()
+    elif cmd == "tools":
+        await _show_tools()
     elif cmd == "log":
         await _show_log(session_id)
     elif cmd == "kill":
