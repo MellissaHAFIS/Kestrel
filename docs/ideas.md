@@ -22,7 +22,7 @@
 **The brief**
 
 - "AI can make every analyst ten times more effective, if it can be trusted. And the AI agents deployed in companies need watching too."
-- **What wins:** "Another prompt filter won't impress the jury: Lakera and Prompt Security were acquired in 2025. Go deeper."
+- **What wins:** "Another prompt filter won't impress the jury: Lakera and Prompt Security were acquired in 2025. Go deeper." *(Confirmed: Check Point agreed to acquire Lakera for ~$300M, announced Sept 2025, closing Q4 2025; SentinelOne acquired Prompt Security for ~$250M, announced Aug 2025. Cite the real numbers on the pitch slide — it's stronger than taking the organizers' word for it.)*
 - **SOCs under pressure:** a copilot that hallucinates is worse than none. Reliability is the challenge: *uncertainty scores, source checks, human in the loop*.
 - **AI agents without supervision:** agents plan and call tools, often via MCP. Malicious instructions can hide in a tool description ("tool poisoning"). OWASP ranks goal hijack and tool misuse first.
 - **Identities and data out of control:** most agents run with over-privileged accounts and nobody knows which exist. EchoLeak showed one booby-trapped e-mail could exfiltrate data with no click needed.
@@ -81,9 +81,9 @@ Two consequences drive the rest of this plan:
 
 - A **tool description** can carry hidden instructions (tool poisoning). The agent follows them because they look like part of the tool's documentation.
 - Each individual action looks legitimate (legitimate agent, legitimate access, legitimate text). The danger is in the **chain**: read a secret → pass it as a "context" parameter → it leaves for a third party.
-- Goal hijack and tool misuse are the top risks in OWASP's agent ranking (verify exact names).
+- Goal hijack and tool misuse are the top risks in OWASP's agent ranking. *(Confirmed: OWASP Top 10 for Agentic Applications, published Dec 2025 — ASI01 = Agent Goal Hijack, ASI02 = Tool Misuse and Exploitation, ASI03 = Identity and Privilege Abuse. EchoLeak is cited by OWASP as evidence for ASI01, which is a clean narrative hook: same incident maps to both your "goal hijack" point and your "over-privileged identity" point below.)*
 - Agents often run with over-privileged accounts, and nobody has an inventory of what they can do.
-- Real precedent: EchoLeak (a booby-trapped e-mail exfiltrating data with no click).
+- Real precedent: EchoLeak (a booby-trapped e-mail exfiltrating data with no click). *(Confirmed: CVE-2025-32711, zero-click prompt injection in Microsoft 365 Copilot, disclosed by Aim Security, June 2025, CVSS 9.3. Put the CVE number and "Microsoft 365 Copilot" on the slide — specifics read as credible, "an AI assistant" doesn't.)*
 - Classic tools (firewall, antivirus, SIEM, DLP) don't understand *what the agent is trying to do*.
 
 **Why not "another prompt filter":** per the organizers, that space has already consolidated. A prompt filter inspects text going into one model. PolicyGuard supervises the *actions* of an agent across a tool chain, including the tool supply chain, with provenance, privilege awareness, evidence-grounded investigation and human control.
@@ -255,7 +255,7 @@ Principle for the slide: **AI proposes, rules guarantee, humans decide.**
 | Layer | Choice |
 |---|---|
 | Agent framework | LangGraph + LangChain (tools, callbacks / middleware, `interrupt()`) |
-| MCP | Python MCP SDK (FastMCP) to build a legit and a poisoned test server; `langchain-mcp-adapters` to load MCP tools into LangGraph (verify both) |
+| MCP | Python MCP SDK (FastMCP) to build a legit and a poisoned test server; load MCP tools into LangGraph via **either** `langchain-mcp-adapters` (`MultiServerMCPClient`) **or** the newer built-in `langchain.mcp.MCPAdapter`, depending on the installed LangChain version — LangChain is migrating `langchain-mcp-adapters` into `langchain.mcp` as of late 2025/2026, with `MultiServerMCPClient` replaced by `MCPAdapter`. Run `pip show langchain langchain-mcp-adapters` first and pick the API that matches what's installed instead of assuming the old package name. |
 | LLMs | Small fast model for DevAssist; stronger model for the Investigator; `temperature=0` (check which models/credits the event provides) |
 | Interception | Wrap MCP tools at the tool-call layer + LangChain callbacks |
 | ML gate | Hugging Face `transformers` + PyTorch (CPU inference), scikit-learn for the logistic-regression baseline |
@@ -307,8 +307,8 @@ LangSmith holds low-level traces of LLM and tool calls; SQLite is the compliance
 |---|---|---|
 | **InjecAgent** (Zhan et al., 2024, ~1,054 cases) | Indirect prompt injection against tool-integrated agents | Source for training / validation; also a sanity check |
 | **AgentDojo** (ETH Zurich) | Dynamic agent environments with utility and security metrics | Held-out test: security while keeping task utility |
-| **R-Judge** (2024, ~569 records) | Whether a judge recognizes safety risks in agent trajectories | Held-out test for the Investigator as a judge |
-| **MCP tool-poisoning benchmark** (e.g. MCPTox; verify it exists and is usable) | Poisoned MCP tool descriptions | Held-out test for the registry scanner |
+| **R-Judge** (confirmed: arxiv 2401.10019, EMNLP Findings 2024, 569 records in the current v3 — an earlier v1 had only 162, don't cite that number) | Whether a judge recognizes safety risks in agent trajectories | Held-out test for the Investigator as a judge — **cut from the v4 build plan, see `devlopment_plan.md`** |
+| **MCPTox** (confirmed: arxiv 2508.14925, 45 live real-world MCP servers, 353 authentic tools) | Poisoned MCP tool descriptions | Held-out test for the registry scanner — **cut from the v4 build plan, see `devlopment_plan.md`; keep as a post-hackathon follow-up** |
 | **Custom tool-description set** (~30 poisoned variants + ~30 benign real-world descriptions) | Registry scanner precision / recall | Fallback if the benchmark isn't usable. State the bias. |
 | **Custom multi-step chains (~10)** | Read-secret → leak chains through MCP tools | Supplement only; public benchmarks are mostly single-step |
 
@@ -439,11 +439,11 @@ Assumes parallel work across teammates; adjust if you're solo.
 **Verification checklist before building** (names and details came from memory or from a blurry photo of the slides)
 
 - [ ] **Ask the organizers:** what are the "common deliverables"? Must the demo be live? Is the "analyst" persona a SOC analyst? Any preferred MCP or tooling?
-- [ ] OWASP agent risk ranking: exact list and category names (goal hijack, tool misuse).
-- [ ] EchoLeak: details to cite accurately (vendor, CVE, mechanism).
-- [ ] MCP tool-poisoning benchmark (e.g. MCPTox): exists, license, format, usable offline.
-- [ ] MCP Python SDK and `langchain-mcp-adapters`: current versions and how to wrap tool calls.
-- [ ] InjecAgent, R-Judge, AgentDojo: exact papers, repos, sizes, formats, how to plug in a defense.
+- [x] OWASP agent risk ranking: **OWASP Top 10 for Agentic Applications (Dec 2025)** — ASI01 Agent Goal Hijack, ASI02 Tool Misuse and Exploitation, ASI03 Identity and Privilege Abuse. EchoLeak cited as ASI01 evidence.
+- [x] EchoLeak: **CVE-2025-32711**, Microsoft 365 Copilot, disclosed by Aim Security, June 2025, CVSS 9.3.
+- [x] MCPTox: real, usable (arxiv 2508.14925). Cut from the v4 build for time, see `devlopment_plan.md`.
+- [x] MCP Python SDK / LangChain MCP integration: `langchain-mcp-adapters` is being folded into `langchain.mcp` (`MCPAdapter`) in current LangChain releases. Check `pip show langchain langchain-mcp-adapters` on the dev machine before writing the wrapper and use whichever API matches what's installed.
+- [x] InjecAgent (1,054 cases, confirmed), R-Judge (569 records, v3, confirmed), AgentDojo (confirmed). All three cut from the v4 build for time — see `devlopment_plan.md`. Keep as post-hackathon follow-up for a stronger eval story.
 - [ ] Pre-trained injection classifiers (Hugging Face / Prompt Guard family): names, licenses, input length limits, CPU latency, training data (contamination).
 - [ ] DeepEval and Giskard: which features actually exist, LangGraph support, and whether they're worth the time.
 - [ ] Models and API credits provided; GPU access if fine-tuning.
