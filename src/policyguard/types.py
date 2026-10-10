@@ -1,145 +1,92 @@
-"""PolicyGuard shared contract: Source, Verdict, Action, Evidence, Decision.
+"""PolicyGuard shared contract: SourceLabel, Action, Evidence, Verdict, AuditEntry.
 
 # =====================================================================
 # FROZEN CONTRACT: changing this needs all four owners to agree.
 # =====================================================================
 
-Every component builds against these types. The single integration seam is
-`policyguard.pipeline.review(action: Action) -> Decision`.
+Every component builds against these types.
 
-Stdlib only. Everything is JSON-serializable through to_dict()/from_dict().
+Pydantic v2 models. Pure data: no I/O, no business logic, no validation rules
+beyond the field types themselves. Serialize with `model_dump()` /
+`model_dump_json()`, deserialize with `model_validate()` /
+`model_validate_json()`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+import uuid
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+# ── Source provenance ──────────────────────────────────────────────────────
+
+SourceLabel = Literal["user", "internal_repo", "mcp_description", "tool_result"]
+
+# ── One intercepted agent action ───────────────────────────────────────────
 
 
-class Source(str, Enum):
-    """Where a piece of content came from (provenance tag)."""
-
-    USER = "user"
-    INTERNAL_REPO = "internal_repo"
-    MCP_DESCRIPTION = "mcp_description"
-    TOOL_RESULT = "tool_result"
-
-    @property
-    def is_trusted(self) -> bool:
-        """USER and INTERNAL_REPO are trusted; MCP_DESCRIPTION and TOOL_RESULT are not."""
-        return self in (Source.USER, Source.INTERNAL_REPO)
-
-
-class Verdict(str, Enum):
-    """Final outcome of a review."""
-
-    ALLOW = "ALLOW"
-    BLOCK = "BLOCK"
-    ESCALATE = "ESCALATE"
-    QUARANTINE = "QUARANTINE"
-
-
-@dataclass
-class Action:
-    """A tool call about to be executed by the agent.
-
-    `sources` lists the provenance of content that preceded this action in the
-    session (what could have influenced it). `history_ref` points to the session
-    history (e.g. a session id or audit row id) for the Investigator.
-    """
-
+class Action(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
-    tool: str
-    server: str
-    args: dict[str, Any]
-    sources: list[Source]
-    history_ref: str | None
-    ts: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "tool": self.tool,
-            "server": self.server,
-            "args": dict(self.args),
-            "sources": [s.value for s in self.sources],
-            "history_ref": self.history_ref,
-            "ts": self.ts,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Action:
-        return cls(
-            session_id=d["session_id"],
-            tool=d["tool"],
-            server=d["server"],
-            args=dict(d.get("args", {})),
-            sources=[Source(s) for s in d.get("sources", [])],
-            history_ref=d.get("history_ref"),
-            ts=float(d["ts"]),
-        )
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    tool_name: str
+    args: dict  # raw tool arguments
+    sources: list[SourceLabel]  # provenance of content in args
+    gate_score: float | None = None  # filled after the ML gate runs
 
 
-@dataclass
-class Evidence:
-    """An observation collected by an Investigator tool. Reports may only cite these ids."""
-
-    id: str
-    tool: str
-    observation: str
-    source: Source | None
-    ts: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "tool": self.tool,
-            "observation": self.observation,
-            "source": self.source.value if self.source is not None else None,
-            "ts": self.ts,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Evidence:
-        src = d.get("source")
-        return cls(
-            id=d["id"],
-            tool=d["tool"],
-            observation=d["observation"],
-            source=Source(src) if src is not None else None,
-            ts=float(d["ts"]),
-        )
+# ── Evidence collected by the Investigator ─────────────────────────────────
 
 
-@dataclass
-class Decision:
-    """Outcome of pipeline.review(). `layer` names who decided (registry, invariants, gate, investigator, ...)."""
+class Evidence(BaseModel):
+    id: str = Field(default_factory=lambda: f"EVD-{uuid.uuid4()}")
+    tool_name: str  # which investigation tool produced this
+    observation: str  # raw text output from the tool
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    verdict: Verdict
-    layer: str
-    score: float | None = None
+
+# ── Final verdict from the Investigator ───────────────────────────────────
+
+
+class Verdict(BaseModel):
+    action_id: str
+    decision: Literal["allow", "block", "sanitize", "escalate"]
+    confidence: float  # 0.0–1.0
+    gate_score: float  # passed in from the gate
+    evidence: list[Evidence]
+    # report: every factual claim MUST be followed by [EVD-<id>]
+    report: str
+    sources: list[SourceLabel]
+    steps_used: int
+    latency_ms: float
+    verified: bool = False  # set by EvidenceVerifier
+
+
+# ── One row in the audit log ───────────────────────────────────────────────
+
+
+class AuditEntry(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    event_type: Literal[
+        "registry_scan", "tool_call", "investigation", "human_decision", "session_kill"
+    ]
+    action: str  # short human-readable description
+    source_labels: list[SourceLabel]
+    layer: Literal["registry", "invariant", "ml_gate", "investigator", "human"]
+    gate_score: float | None = None
+    model_hash: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    violation: bool = False
+    severity: Literal["low", "medium", "high", "critical"] = "low"
     confidence: float | None = None
-    evidence_ids: list[str] = field(default_factory=list)
-    reason: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "verdict": self.verdict.value,
-            "layer": self.layer,
-            "score": self.score,
-            "confidence": self.confidence,
-            "evidence_ids": list(self.evidence_ids),
-            "reason": self.reason,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Decision:
-        return cls(
-            verdict=Verdict(d["verdict"]),
-            layer=d["layer"],
-            score=d.get("score"),
-            confidence=d.get("confidence"),
-            evidence_ids=list(d.get("evidence_ids", [])),
-            reason=d.get("reason", ""),
-        )
+    reasoning: str = ""
+    decision: Literal[
+        "allow", "block", "sanitize", "quarantine", "escalate", "pending", "killed"
+    ] = "pending"
+    decided_by: Literal["system", "investigator", "human"] = "system"
+    steps_used: int = 0
+    latency_ms: float = 0.0

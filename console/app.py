@@ -1,95 +1,217 @@
-"""Analyst console (Chainlit): incident queue, incident cards, Approve/Block, live feed.
+"""Analyst console (Chainlit): escalation queue, incident cards, Approve/Block, kill switch.
 
 Owner: Person 4 (audit/console/eval).
-First deliverable: live feed showing decisions; then eval harness.
+This is the human-in-the-loop interface. The analyst reviews escalations and acts on them.
 
-Runs on FAKE incidents today so the console can be built before the guard exists.
 Run: chainlit run console/app.py
+
+Commands: queue | log | approve <id> | block <id> | kill
 """
 
 from __future__ import annotations
 
-import time
-from typing import Any
+import uuid
 
 import chainlit as cl
 
-from policyguard import audit
-from policyguard.types import Action, Decision, Source, Verdict
+from policyguard.audit import audit_log
+from policyguard.policy import policy_store
+from policyguard.types import AuditEntry
+
+POLICY_PATH = "policy/devassist.yaml"
+
+#: Max escalations shown by `queue`.
+QUEUE_LIMIT = 50
+
+HELP = "Unknown command. Try: `queue` | `log` | `kill` | `approve <id>` | `block <id>`"
 
 
-def fake_incidents() -> list[tuple[Action, Decision]]:
-    """FAKE data. TODO(person4): replace with audit.list_decisions(decision='ESCALATE') of unresolved incidents."""
-    now = time.time()
-    a1 = Action("demo-0001", "lookup_reference", "docs_helper",
-                {"query": "constant time compare", "session_notes": "jwt secret starts with FAKE-jwt..."},
-                [Source.USER, Source.INTERNAL_REPO, Source.MCP_DESCRIPTION], "demo-0001", now)
-    d1 = Decision(Verdict.ESCALATE, "investigator", 0.55, 0.52, ["E1", "E2"],
-                  "Paraphrased partial leak of config values to an untrusted server (FAKE).")
-    a2 = Action("demo-0002", "search_docs", "docs_helper",
-                {"query": "auth", "context": "<settings.yaml contents>"},
-                [Source.MCP_DESCRIPTION], "demo-0002", now)
-    d2 = Decision(Verdict.ESCALATE, "gate", 0.64, None, [], "Unexpected parameter 'context' (FAKE).")
-    return [(a1, d1), (a2, d2)]
+# ── Incident card ──────────────────────────────────────────────────────────
 
 
-def incident_actions(action: Action, decision: Decision) -> list[cl.Action]:
-    payload: dict[str, Any] = {"action": action.to_dict(), "decision": decision.to_dict()}
-    return [
-        cl.Action(name="approve", payload=payload, label="Approve"),
-        cl.Action(name="block", payload=payload, label="Block"),
-    ]
-
-
-async def show_incident(action: Action, decision: Decision) -> None:
-    """Render one incident card."""
-    # TODO(person4): evidence links, source tags, gate score / confidence bars
-    body = (
-        f"**Incident** `{action.session_id}`: `{action.server}/{action.tool}`\n\n"
-        f"- args: `{action.args}`\n"
-        f"- sources: {[s.value for s in action.sources]}\n"
-        f"- layer: {decision.layer}, score: {decision.score}, confidence: {decision.confidence}\n"
-        f"- evidence: {decision.evidence_ids}\n"
-        f"- reason: {decision.reason}"
+def incident_card(entry: AuditEntry) -> str:
+    """Render one escalation as an incident card."""
+    evidence = ", ".join(entry.evidence_ids) or "(none)"
+    sources = ", ".join(entry.source_labels) or "(none)"
+    return (
+        f"🚨 **ESCALATION** — `{entry.id}`\n\n"
+        f"```\n"
+        f"Session:     {entry.session_id}\n"
+        f"Time:        {entry.timestamp}\n"
+        f"Action:      {entry.action}\n"
+        f"Sources:     {sources}\n"
+        f"Gate score:  {entry.gate_score}   Confidence: {entry.confidence}\n"
+        f"Steps used:  {entry.steps_used}\n"
+        f"Severity:    {entry.severity}\n"
+        f"Layer:       {entry.layer}\n"
+        f"```\n"
+        f"**Evidence IDs:** {evidence}\n\n"
+        f"**Reasoning:** {entry.reasoning or '(none recorded)'}\n\n"
+        f"→ `approve {entry.id}`   or   `block {entry.id}`"
     )
-    await cl.Message(content=body, actions=incident_actions(action, decision)).send()
+
+
+# ── Startup ────────────────────────────────────────────────────────────────
 
 
 @cl.on_chat_start
 async def start() -> None:
-    audit.init_db()
-    await cl.Message(content="PolicyGuard console (FAKE data). Type `feed` for the live feed.").send()
-    for action, decision in fake_incidents():
-        await show_incident(action, decision)
+    await audit_log.init()
+    policy_store.load(POLICY_PATH)
+    session_id = str(uuid.uuid4())
+    cl.user_session.set("session_id", session_id)
+    cl.user_session.set("killed", False)
+    await cl.Message(
+        content=(
+            f"🛡️  **PolicyGuard Analyst Console**\n\n"
+            f"Console session: `{session_id}`\n\n"
+            f"Policy: {policy_store.summary()}\n\n"
+            f"Commands:\n"
+            f"```\n"
+            f"queue            — show pending escalations\n"
+            f"log              — full session audit log\n"
+            f"approve <id>     — approve an escalated action\n"
+            f"block <id>       — block an escalated action\n"
+            f"kill             — kill the session immediately\n"
+            f"```"
+        )
+    ).send()
 
 
-async def resolve(act: cl.Action, verdict: Verdict) -> None:
-    action = Action.from_dict(act.payload["action"])
-    original = Decision.from_dict(act.payload["decision"])
-    human = Decision(verdict, "human", original.score, original.confidence, original.evidence_ids,
-                     f"analyst {verdict.value.lower()}ed (original: {original.verdict.value} by {original.layer})")
-    audit.log_decision(action, human, event_type="human_decision", decided_by="analyst")
-    await cl.Message(content=f"Recorded **{verdict.value}** for `{action.session_id}`.").send()
-    # TODO(person4): resume the paused LangGraph interrupt for this session
+# ── Command handlers ───────────────────────────────────────────────────────
 
 
-@cl.action_callback("approve")
-async def on_approve(act: cl.Action) -> None:
-    await resolve(act, Verdict.ALLOW)
+async def _show_queue() -> None:
+    """Send one incident card per pending escalation, across all agent sessions."""
+    escalations = await audit_log.get_all_escalations(QUEUE_LIMIT)
+    if not escalations:
+        await cl.Message(content="✅ No pending escalations.").send()
+        return
+    await cl.Message(content=f"**{len(escalations)} pending escalation(s):**").send()
+    for entry in escalations:
+        await cl.Message(content=incident_card(entry)).send()
 
 
-@cl.action_callback("block")
-async def on_block(act: cl.Action) -> None:
-    await resolve(act, Verdict.BLOCK)
+async def _show_log(session_id: str) -> None:
+    """Send the audit log as a plain-text table in a code block."""
+    entries = await audit_log.get_session(session_id)
+    if not entries:
+        entries = await audit_log.get_all_escalations(QUEUE_LIMIT)
+        header = "No entries for this console session; showing recent escalations instead."
+    else:
+        header = f"Audit log for `{session_id}`:"
+    if not entries:
+        await cl.Message(content="Audit log is empty.").send()
+        return
+    rows = [f"{'TIMESTAMP':<26} {'LAYER':<13} {'ACTION':<42} DECISION", "-" * 95]
+    rows += [
+        f"{str(e.timestamp):<26} {e.layer:<13} {e.action[:42]:<42} {e.decision}" for e in entries
+    ]
+    await cl.Message(content=f"{header}\n```\n" + "\n".join(rows) + "\n```").send()
+
+
+async def _kill(session_id: str) -> None:
+    """Flip the kill switch and record it so the guard process can see it."""
+    cl.user_session.set("killed", True)
+    await audit_log.log(
+        AuditEntry(
+            session_id=session_id,
+            event_type="session_kill",
+            action="analyst activated the kill switch",
+            source_labels=["user"],
+            layer="human",
+            decision="killed",
+            decided_by="human",
+            severity="critical",
+            violation=True,
+            reasoning="Analyst killed the session from the console.",
+        )
+    )
+    await cl.Message(content="⛔ Session killed. All further agent actions are blocked.").send()
+
+
+async def _resolve(entry_id: str, session_id: str, decision: str) -> None:
+    """Apply the analyst's Approve/Block to an escalated entry and log the override."""
+    original = next(
+        (e for e in await audit_log.get_all_escalations(QUEUE_LIMIT) if e.id == entry_id), None
+    )
+    verb = "approved" if decision == "allow" else "blocked"
+    reason = f"Analyst {verb}"
+
+    await audit_log.update_decision(entry_id, decision, "human", reason)
+    await audit_log.log(
+        AuditEntry(
+            session_id=original.session_id if original else session_id,
+            event_type="human_decision",
+            action=f"analyst {verb} {entry_id}"
+            + (f" ({original.action})" if original else ""),
+            source_labels=original.source_labels if original else ["user"],
+            layer="human",
+            gate_score=original.gate_score if original else None,
+            confidence=original.confidence if original else None,
+            evidence_ids=original.evidence_ids if original else [],
+            severity=original.severity if original else "low",
+            decision=decision,
+            decided_by="human",
+            violation=decision == "block",
+            reasoning=reason,
+        )
+    )
+
+    if original is None:
+        await cl.Message(
+            content=(
+                f"⚠️ No pending escalation found with id `{entry_id}` — "
+                f"the override was still logged. Run `queue` to see valid ids."
+            )
+        ).send()
+    elif decision == "allow":
+        await cl.Message(content=f"✅ Action `{entry_id}` approved and logged.").send()
+    else:
+        await cl.Message(content=f"🚫 Action `{entry_id}` blocked and logged.").send()
+
+
+# ── Message router ─────────────────────────────────────────────────────────
 
 
 @cl.on_message
-async def on_message(msg: cl.Message) -> None:
-    """Live feed area: `feed` prints the latest audit rows."""
-    # TODO(person4): push new rows automatically (poll audit.list_decisions(since_id=...)), add kill switch
-    if msg.content.strip().lower() == "feed":
-        rows = audit.list_decisions(limit=20)
-        lines = [f"#{r['id']} {r['decision']} by {r['decided_by']} {r['session_id']}: {r['reasoning']}" for r in rows]
-        await cl.Message(content="\n".join(lines) or "No decisions logged yet.").send()
+async def handle(message: cl.Message) -> None:
+    session_id = cl.user_session.get("session_id")
+    killed = cl.user_session.get("killed", False)
+    cmd = message.content.strip()
+
+    if killed and not cmd.startswith("log"):
+        await cl.Message(content="⛔ Session is killed. Only `log` is available.").send()
+        return
+
+    if cmd == "queue":
+        await _show_queue()
+    elif cmd == "log":
+        await _show_log(session_id)
+    elif cmd == "kill":
+        await _kill(session_id)
+    elif cmd.startswith("approve "):
+        entry_id = cmd.split(" ", 1)[1].strip()
+        await _resolve(entry_id, session_id, "allow")
+    elif cmd.startswith("block "):
+        entry_id = cmd.split(" ", 1)[1].strip()
+        await _resolve(entry_id, session_id, "block")
     else:
-        await cl.Message(content="Commands: `feed`").send()
+        await cl.Message(content=HELP).send()
+
+
+# ── Real-time alert (called by the Investigator when an escalation fires) ──
+
+
+async def send_escalation_alert(entry: AuditEntry) -> None:
+    """Push an incident card immediately when the Investigator escalates.
+
+    Only works in-process: `cl.Message` needs an active Chainlit session context.
+    When the guard runs as a separate process (the normal demo setup) there is no
+    context, so this logs a warning and returns instead of raising -- the incident
+    is already durable in the audit log and will appear via `queue`.
+    """
+    try:
+        await cl.Message(content=incident_card(entry)).send()
+    except Exception as exc:  # noqa: BLE001 - never break the guard on a UI push
+        print(f"[console] could not push escalation {entry.id} ({exc!r}); use `queue` in the console")

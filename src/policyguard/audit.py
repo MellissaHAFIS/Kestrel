@@ -1,23 +1,34 @@
-"""Audit log: SQLite + JSON export (SIEM-friendly). The console depends on this module.
+"""Audit log: async SQLite (aiosqlite) + JSON/CSV export (SIEM-friendly).
 
 Owner: Person 4 (audit/console/eval).
 First deliverable: live feed showing decisions; then eval harness.
+
+Single table "events" whose columns map 1-to-1 to `AuditEntry` fields. The list
+fields (`source_labels`, `evidence_ids`) are stored as JSON strings; `timestamp`
+is stored as an ISO-8601 string so it round-trips through pydantic.
+
+Usage:
+    from policyguard.audit import audit_log
+    await audit_log.init()            # once at startup
+    await audit_log.log(entry)
 """
 
 from __future__ import annotations
 
+import csv
 import json
-import os
-import sqlite3
-import time
-from pathlib import Path
+from datetime import datetime
 from typing import Any
 
-from policyguard.types import Action, Decision
+import aiosqlite
+
+from policyguard.types import AuditEntry
 
 DEFAULT_DB_PATH = "policyguard_audit.db"
 
-COLUMNS = (
+#: Column order used by every INSERT and by the CSV export. 1-to-1 with AuditEntry.
+COLUMNS: tuple[str, ...] = (
+    "id",
     "session_id",
     "timestamp",
     "event_type",
@@ -37,131 +48,174 @@ COLUMNS = (
     "latency_ms",
 )
 
-_JSON_COLUMNS = ("action", "source_labels", "evidence_ids")
+#: Columns persisted as JSON strings.
+_JSON_COLUMNS: tuple[str, ...] = ("source_labels", "evidence_ids")
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS audit_log (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS events (
+    id            TEXT PRIMARY KEY,
     session_id    TEXT NOT NULL,
-    timestamp     REAL NOT NULL,
+    timestamp     TEXT NOT NULL,
     event_type    TEXT NOT NULL,
-    action        TEXT,
-    source_labels TEXT,
-    layer         TEXT,
+    action        TEXT NOT NULL,
+    source_labels TEXT NOT NULL,
+    layer         TEXT NOT NULL,
     gate_score    REAL,
     model_hash    TEXT,
-    evidence_ids  TEXT,
-    violation     TEXT,
-    severity      TEXT,
+    evidence_ids  TEXT NOT NULL,
+    violation     INTEGER NOT NULL DEFAULT 0,
+    severity      TEXT NOT NULL DEFAULT 'low',
     confidence    REAL,
-    reasoning     TEXT,
-    decision      TEXT,
-    decided_by    TEXT,
-    steps_used    INTEGER,
-    latency_ms    REAL
+    reasoning     TEXT NOT NULL DEFAULT '',
+    decision      TEXT NOT NULL DEFAULT 'pending',
+    decided_by    TEXT NOT NULL DEFAULT 'system',
+    steps_used    INTEGER NOT NULL DEFAULT 0,
+    latency_ms    REAL NOT NULL DEFAULT 0.0
 );
-CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
-CREATE INDEX IF NOT EXISTS idx_audit_decision ON audit_log(decision);
+CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision);
 """
 
 
-def db_path(path: str | Path | None = None) -> str:
-    return str(path or os.environ.get("POLICYGUARD_DB") or DEFAULT_DB_PATH)
+def _to_row(entry: AuditEntry) -> tuple[Any, ...]:
+    """Flatten an AuditEntry into a row tuple matching COLUMNS."""
+    d = entry.model_dump()
+    d["timestamp"] = entry.timestamp.isoformat()
+    d["violation"] = int(entry.violation)
+    for col in _JSON_COLUMNS:
+        d[col] = json.dumps(d[col])
+    return tuple(d[col] for col in COLUMNS)
 
 
-def connect(path: str | Path | None = None) -> sqlite3.Connection:
-    """Open the DB (creating the schema if needed)."""
-    conn = sqlite3.connect(db_path(path))
-    conn.row_factory = sqlite3.Row
-    conn.executescript(_SCHEMA)
-    return conn
-
-
-def init_db(path: str | Path | None = None) -> None:
-    connect(path).close()
-
-
-def log_decision(
-    action: Action,
-    decision: Decision,
-    *,
-    event_type: str = "tool_call",
-    decided_by: str | None = None,
-    model_hash: str | None = None,
-    violation: str | None = None,
-    severity: str | None = None,
-    steps_used: int | None = None,
-    latency_ms: float | None = None,
-    path: str | Path | None = None,
-) -> int:
-    """Insert one row and return its id. `decided_by` defaults to the deciding layer."""
-    conn = connect(path)
-    try:
-        cur = conn.execute(
-            f"INSERT INTO audit_log ({', '.join(COLUMNS)}) VALUES ({', '.join('?' * len(COLUMNS))})",
-            (
-                action.session_id,
-                time.time(),
-                event_type,
-                json.dumps(action.to_dict()),
-                json.dumps([s.value for s in action.sources]),
-                decision.layer,
-                decision.score,
-                model_hash,
-                json.dumps(decision.evidence_ids),
-                violation,
-                severity,
-                decision.confidence,
-                decision.reason,
-                decision.verdict.value,
-                decided_by or decision.layer,
-                steps_used,
-                latency_ms,
-            ),
-        )
-        conn.commit()
-        return int(cur.lastrowid or 0)
-    finally:
-        conn.close()
-
-
-def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def _from_row(row: aiosqlite.Row) -> AuditEntry:
+    """Rebuild an AuditEntry from a DB row."""
     d = dict(row)
     for col in _JSON_COLUMNS:
-        if d.get(col) is not None:
-            d[col] = json.loads(d[col])
-    return d
+        d[col] = json.loads(d[col])
+    d["violation"] = bool(d["violation"])
+    return AuditEntry.model_validate(d)
 
 
-def list_decisions(
-    *,
-    session_id: str | None = None,
-    decision: str | None = None,
-    since_id: int = 0,
-    limit: int = 200,
-    path: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    """Rows as dicts, oldest first. `since_id` supports polling for a live feed."""
-    sql = "SELECT * FROM audit_log WHERE id > ?"
-    params: list[Any] = [since_id]
-    if session_id is not None:
-        sql += " AND session_id = ?"
-        params.append(session_id)
-    if decision is not None:
-        sql += " AND decision = ?"
-        params.append(decision)
-    sql += " ORDER BY id ASC LIMIT ?"
-    params.append(limit)
-    conn = connect(path)
-    try:
-        return [_row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
-    finally:
-        conn.close()
+class AuditLog:
+    """
+    Single SQLite table "events" — columns map 1-to-1 to AuditEntry fields.
+    Lists (source_labels, evidence_ids) are stored as JSON strings.
+    """
+
+    def __init__(self) -> None:
+        self.db_path: str = DEFAULT_DB_PATH
+
+    async def init(self, db_path: str = DEFAULT_DB_PATH) -> None:
+        """Create the table if it doesn't exist. Store db_path on self."""
+        self.db_path = db_path
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executescript(_SCHEMA)
+            await db.commit()
+
+    async def log(self, entry: AuditEntry) -> None:
+        """
+        INSERT one AuditEntry row.
+        Never raises: catch all exceptions and print a warning.
+        """
+        try:
+            placeholders = ", ".join("?" * len(COLUMNS))
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    f"INSERT INTO events ({', '.join(COLUMNS)}) VALUES ({placeholders})",
+                    _to_row(entry),
+                )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 - the audit log must never break the guard
+            print(f"[audit] WARNING: failed to log entry {getattr(entry, 'id', '?')}: {exc!r}")
+
+    async def _query(self, sql: str, params: tuple[Any, ...]) -> list[AuditEntry]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(sql, params) as cur:
+                rows = await cur.fetchall()
+        return [_from_row(r) for r in rows]
+
+    async def get_session(self, session_id: str) -> list[AuditEntry]:
+        """Return all entries for session_id, ordered by timestamp asc."""
+        return await self._query(
+            "SELECT * FROM events WHERE session_id = ? ORDER BY timestamp ASC",
+            (session_id,),
+        )
+
+    async def get_escalations(self, session_id: str) -> list[AuditEntry]:
+        """Return entries where decision == 'escalate', ordered by timestamp desc."""
+        return await self._query(
+            "SELECT * FROM events WHERE session_id = ? AND decision = 'escalate' "
+            "ORDER BY timestamp DESC",
+            (session_id,),
+        )
+
+    async def update_decision(
+        self,
+        entry_id: str,
+        decision: str,
+        decided_by: str,
+        reasoning: str,
+    ) -> None:
+        """
+        UPDATE a single row by id.
+        Used when the human analyst clicks Approve or Block in the console.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE events SET decision = ?, decided_by = ?, reasoning = ? WHERE id = ?",
+                (decision, decided_by, reasoning, entry_id),
+            )
+            await db.commit()
+
+    async def get_all_escalations(self, limit: int = 50) -> list[AuditEntry]:
+        """Escalations across every session, newest first.
+
+        The console runs in its own process with its own session id, so it cannot
+        use `get_escalations(session_id)` to find the agent's incidents.
+        """
+        return await self._query(
+            "SELECT * FROM events WHERE decision = 'escalate' ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def is_session_killed(self, session_id: str) -> bool:
+        """True once a session_kill event has been logged for `session_id`.
+
+        The guard calls this before every action so the analyst's kill switch
+        actually stops the agent.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute(
+                    "SELECT 1 FROM events WHERE session_id = ? "
+                    "AND (event_type = 'session_kill' OR decision = 'killed') LIMIT 1",
+                    (session_id,),
+                ) as cur:
+                    return await cur.fetchone() is not None
+        except Exception as exc:  # noqa: BLE001 - fail closed: treat as killed if unknown
+            print(f"[audit] WARNING: kill-switch check failed, failing closed: {exc!r}")
+            return True
+
+    async def export_json(self, session_id: str, path: str) -> None:
+        """Write a JSON array of AuditEntry.model_dump() to path."""
+        entries = await self.get_session(session_id)
+        rows = [e.model_dump(mode="json") for e in entries]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, indent=2)
+
+    async def export_csv(self, session_id: str, path: str) -> None:
+        """Write a CSV (csv.DictWriter) of the same rows to path."""
+        entries = await self.get_session(session_id)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(COLUMNS))
+            writer.writeheader()
+            for entry in entries:
+                row = entry.model_dump(mode="json")
+                for col in _JSON_COLUMNS:
+                    row[col] = json.dumps(row[col])
+                writer.writerow(row)
 
 
-def export_json(out_path: str | Path | None = None, *, path: str | Path | None = None) -> str:
-    """Export the whole log as a JSON array string; also writes it to `out_path` if given."""
-    text = json.dumps(list_decisions(limit=1_000_000, path=path), indent=2)
-    if out_path is not None:
-        Path(out_path).write_text(text, encoding="utf-8")
-    return text
+# Module-level singleton — call `await audit_log.init()` once at startup.
+audit_log = AuditLog()

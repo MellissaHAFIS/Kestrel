@@ -74,3 +74,96 @@ def load_policy(path: str | Path | None = None) -> Policy:
     p = Path(path or os.environ.get("POLICYGUARD_POLICY") or DEFAULT_POLICY_PATH)
     with p.open("r", encoding="utf-8") as fh:
         return policy_from_dict(yaml.safe_load(fh))
+
+
+# =====================================================================
+# PolicyStore: read-only accessor used by the Investigator tools.
+# Additive shim (Person 3). Does not change load_policy/Policy above.
+# =====================================================================
+
+
+class PolicyStore:
+    """Lazy, cached, read-only view over the policy YAML.
+
+    Exposes the accessors the Investigator tools need. Loading is lazy so
+    importing this module never fails when the YAML is missing.
+    """
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self._path = path
+        self._raw: dict[str, Any] | None = None
+
+    # --- loading ---------------------------------------------------------
+    @property
+    def raw(self) -> dict[str, Any]:
+        """The parsed YAML as a plain dict (cached). Empty dict if unreadable."""
+        if self._raw is None:
+            p = Path(self._path or os.environ.get("POLICYGUARD_POLICY") or DEFAULT_POLICY_PATH)
+            try:
+                with p.open("r", encoding="utf-8") as fh:
+                    self._raw = yaml.safe_load(fh) or {}
+            except (OSError, yaml.YAMLError):
+                self._raw = {}
+        return self._raw
+
+    def load(self, path: str | Path | None = None) -> None:
+        """Point the store at `path` and read it now (replacing any cached policy)."""
+        self._path = path
+        self._raw = None
+        _ = self.raw  # force the read so errors surface at startup, not mid-investigation
+
+    def reload(self) -> None:
+        """Drop the cache so the next access re-reads the file."""
+        self._raw = None
+
+    def summary(self) -> str:
+        """One-line human-readable description of the loaded policy (for the console header)."""
+        raw = self.raw
+        if not raw:
+            return "no policy loaded"
+        return (
+            f"`{raw.get('agent', 'unknown')}` — "
+            f"{len(raw.get('allowed_tools', []))} allowed tools, "
+            f"{len(raw.get('untrusted_servers', []))} untrusted servers, "
+            f"{len(raw.get('trusted_hosts', []))} trusted hosts, "
+            f"{len(raw.get('sensitive_paths', []))} sensitive paths, "
+            f"{len(raw.get('canaries', []))} canaries"
+        )
+
+    @property
+    def policy(self) -> Policy:
+        """The typed Policy dataclass."""
+        return policy_from_dict(self.raw)
+
+    # --- accessors -------------------------------------------------------
+    def get_section(self, section: str) -> Any:
+        """Return a sub-section by dot-notation key (e.g. 'thresholds.max_steps').
+
+        Raises KeyError if any part of the path is missing.
+        """
+        node: Any = self.raw
+        for part in section.split("."):
+            if not isinstance(node, dict) or part not in node:
+                raise KeyError(section)
+            node = node[part]
+        return node
+
+    def get_sensitive_paths(self) -> list[str]:
+        """Glob patterns for files the agent must not read without approval."""
+        return list(self.raw.get("sensitive_paths", []))
+
+    def get_trusted_destinations(self) -> list[str]:
+        """Hosts the agent may send data to."""
+        return list(self.raw.get("trusted_hosts", []))
+
+    def get_blocked_destinations(self) -> list[str]:
+        """Untrusted/third-party servers. Anything sent here is screened."""
+        return list(self.raw.get("untrusted_servers", []))
+
+    def canary_tokens(self) -> list[str]:
+        """Canary tokens planted in the fixture repo."""
+        return list(self.raw.get("canaries", []))
+
+
+#: Module-level singleton used by the Investigator tools.
+policy_store = PolicyStore()
