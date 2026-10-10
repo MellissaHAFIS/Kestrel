@@ -34,6 +34,7 @@ ml = [
 ]
 bench = [
     "matplotlib==3.11.2",  # eval/chart.py: the results chart
+    "boto3==1.43.111",     # Bedrock SigV4 for --mode bedrock (AsyncAnthropicBedrock)
 ]
 dev = [
     "pytest==9.1.1",
