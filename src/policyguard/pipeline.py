@@ -132,18 +132,45 @@ async def _layer_unavailable(action: Action, layer: str, detail: str) -> Verdict
 # ── 1. Registry ────────────────────────────────────────────────────────────
 
 
+def _registry_entry(registry: dict[str, Any], tool_name: str) -> dict[str, Any] | None:
+    """Look up a tool in TOOL_REGISTRY by qualified or bare name.
+
+    `Action.tool_name` is fully qualified as "server.tool" (see compat.py and
+    policy/devassist.yaml), but the registry is keyed by the bare tool name the
+    MCP adapter reports. Without this fallback the registry layer silently never
+    matched, so quarantined tools fell through to the invariants.
+    """
+    entry = registry.get(tool_name)
+    if entry is not None:
+        return entry
+    _server, _, bare = tool_name.rpartition(".")
+    return registry.get(bare) if bare else None
+
+
 async def _check_registry(action: Action) -> Verdict | None:
     """Quarantined tools never reach any later layer."""
     try:
         from policyguard.registry import TOOL_REGISTRY
     except Exception as exc:  # noqa: BLE001
         return await _layer_unavailable(action, "registry", repr(exc))
-    entry = TOOL_REGISTRY.get(action.tool_name)
+    entry = _registry_entry(TOOL_REGISTRY, action.tool_name)
     if entry and entry.get("status") == "quarantined":
         findings = entry.get("scan_result", {}).get("findings", [])
         detail = f": {findings[0]}" if findings else ""
+        # BLOCK, not escalate, decided deliberately -- see defence-sheet.md 5.
+        # `escalate` was tried: it reaches the same destination (neither decision
+        # executes the call, and an unanswered escalation fails closed anyway),
+        # so it buys nothing on the strict benign number, which requires every
+        # step to be `allow`. What it does buy is a human who can approve a tool
+        # the scanner already judged poisoned, which shows up as a regression in
+        # `asr_if_escalations_approved`. A quarantine is the one verdict we can
+        # defend without relying on an analyst being alert, so it stays final.
         return await _instant_verdict(
-            action, "block", 1.0, f"Tool quarantined by registry{detail}", layer="registry"
+            action,
+            "block",
+            1.0,
+            f"Tool quarantined by registry{detail}",
+            layer="registry",
         )
     return None
 

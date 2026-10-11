@@ -182,12 +182,15 @@ def _scan_registry(by_name: dict[str, Any]) -> None:
         description = tool.description or ""
         schema = _tool_param_schema(tool)
         try:
+            # The live scan is authoritative: register_tool overwrites whatever
+            # TOOL_REGISTRY held, so the status the pipeline later enforces is
+            # the one derived from the description we actually received from the
+            # server, not a value seeded in source.
             result = registry.scan_tool(name, description, schema)
-            # The seed TOOL_REGISTRY already encodes the demo verdicts (search_docs
-            # is quarantined, lookup_reference suspicious). Prefer it when present.
-            entry = registry.TOOL_REGISTRY.get(name)
-            status = entry.get("status") if entry else ("suspicious" if result.suspicious else "clean")
-            findings = (entry or {}).get("scan_result", {}).get("findings", []) or result.findings
+            registry.register_tool(name, description, schema, result)
+            status = result.status
+            findings = result.findings
+            score = result.score
         except Exception as exc:  # noqa: BLE001
             print(f"[registry]   {name}: scan error ({exc!r})")
             continue
@@ -196,21 +199,32 @@ def _scan_registry(by_name: dict[str, Any]) -> None:
             "suspicious": "suspicious",
             "clean": "clean",
         }.get(status, status or "unscanned")
-        print(f"[registry]   {name}: {marker}")
+        print(f"[registry]   {name}: {marker} (score {score})")
         for finding in findings:
             print(f"[registry]       - {finding}")
 
 
 def _tool_param_schema(tool: Any) -> dict[str, Any]:
-    """Best-effort {param: 'type'} view of a LangChain tool's args, for the scan."""
+    """Best-effort {param: 'type'} view of a LangChain tool's args, for the scan.
+
+    `args_schema` comes in two shapes depending on how the tool was built:
+    a Pydantic model (native LangChain tools) or a plain JSON-Schema dict
+    (what langchain-mcp-adapters hands back for MCP tools). Handle both --
+    only reading the Pydantic form meant this returned `{}` for every MCP
+    tool, so the schema half of the registry scan never ran.
+    """
     try:
         schema = tool.args_schema
-        props = getattr(schema, "model_json_schema", None)
-        if callable(props):
-            return {k: v.get("type", "string") for k, v in props().get("properties", {}).items()}
+        if isinstance(schema, dict):
+            properties = schema.get("properties", {})
+        else:
+            to_json_schema = getattr(schema, "model_json_schema", None)
+            if not callable(to_json_schema):
+                return {}
+            properties = to_json_schema().get("properties", {})
+        return {k: v.get("type", "string") for k, v in properties.items()}
     except Exception:  # noqa: BLE001 - the scan only needs an approximate schema
-        pass
-    return {}
+        return {}
 
 
 def _qualified(server: str, tool: str) -> str:
