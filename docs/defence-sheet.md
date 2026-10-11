@@ -179,6 +179,22 @@ Not an option, in any case: editing the chains after seeing these results. That 
 - Hard invariants cannot be overridden by the AI. Step/tool/token budgets. Timeouts.
 - Human approval for the uncertain band; kill switch stops the session.
 - Full SQLite audit log of every decision with the deciding layer and reasoning.
+- **The audit log is tamper-evident.** Every row stores the SHA-256 of the row before it, so
+  editing, deleting or reordering any row invalidates every digest after it. `verify` in the
+  console replays the chain. Demonstrated end to end: a fresh log verifies; an analyst clicking
+  Approve still verifies *and* the override is listed (an amendment is appended as its own
+  chained event, so a legitimate decision and a forgery are distinguishable); flipping a blocked
+  leak to `allow` with raw SQL is reported as tampering with the exact row id. 19 tests in
+  `tests/test_audit_chain.py`, which attack the log the way someone covering their tracks would —
+  direct SQL rather than the API — including the attacker's obvious next move of re-signing the
+  edited row, which still breaks the following row's link.
+
+  **State the limits in the same breath, they are in the tests too.** This makes tampering
+  *detectable*, not impossible: anyone who can write the database can recompute the whole chain,
+  and deleting the newest rows leaves a chain that is internally consistent
+  (`test_deleting_the_last_row_is_not_detectable` pins that honestly). Closing both gaps needs a
+  digest published where the attacker has no write access. That is a roadmap line, not shipped —
+  and per our standing decision it does not need a blockchain to work.
 
 ## 7. What we'd do next
 - Harden the gate against truncated/split/encoded leaks (the remaining miss offline is a canary

@@ -37,7 +37,10 @@ POLICY_PATH = "policy/devassist.yaml"
 #: Max escalations shown by `queue`.
 QUEUE_LIMIT = 50
 
-HELP = "Unknown command. Try: `queue` | `tools` | `log` | `kill` | `approve <id>` | `block <id>`"
+HELP = (
+    "Unknown command. Try: `queue` | `tools` | `log` | `verify` | `kill` "
+    "| `approve <id>` | `block <id>`"
+)
 
 
 # ── Incident card ──────────────────────────────────────────────────────────
@@ -85,6 +88,7 @@ async def start() -> None:
             f"queue            — show pending escalations\n"
             f"tools            — tool registry: which tools are quarantined and why\n"
             f"log              — full session audit log\n"
+            f"verify           — replay the audit hash chain: has the log been tampered with?\n"
             f"approve <id>     — approve an escalated action\n"
             f"block <id>       — block an escalated action\n"
             f"kill             — kill the session immediately\n"
@@ -162,6 +166,58 @@ async def _show_tools() -> None:
         else:
             lines.append("_no suspicious findings_")
         await cl.Message(content="\n".join(lines)).send()
+
+
+async def _verify_chain() -> None:
+    """Replay the audit log's hash chain and report whether it is intact.
+
+    Every row stores the hash of the row before it, so editing, deleting or
+    reordering any row breaks every digest after it. This is the control an
+    auditor cares about: not "the log says X", but "the log can be shown not to
+    have been rewritten since X was written".
+
+    Deliberately states the limit alongside the result. The chain makes
+    tampering *detectable*, not impossible: whoever can write the database can
+    recompute the chain, and truncating the newest rows leaves a consistent
+    chain. Closing that needs a digest published where the attacker has no
+    write access, which is roadmap, not shipped.
+    """
+    report = await audit_log.verify_chain()
+    # Three outcomes, not two. A row written before the chain existed cannot be
+    # attested, but it is not evidence of tampering either -- calling it
+    # tampering would cry wolf on any pre-existing database, including on
+    # stage. Only a broken link or an unexplained edit is an alarm.
+    if report["broken_links"] or report["tampered"]:
+        status = "🚨 TAMPERING DETECTED"
+    elif report["unhashed"]:
+        status = "⚠️ intact, but partly predates the chain"
+    else:
+        status = "✅ intact"
+    lines = [
+        f"**Audit chain: {status}**",
+        "",
+        f"Rows checked: {report['rows']}",
+    ]
+    for label, key in (
+        ("Broken links (insert / delete / reorder)", "broken_links"),
+        ("Rows altered with no amendment on record", "tampered"),
+        ("Rows not covered by the chain", "unhashed"),
+    ):
+        if report[key]:
+            lines.append(f"- {label}: `{'`, `'.join(report[key][:10])}`")
+    if report["amended"]:
+        lines.append(
+            f"- Analyst overrides on record (legitimate): {len(report['amended'])}"
+        )
+    lines += [
+        "",
+        "_Each row commits to the hash of the previous one, so any edit, deletion or "
+        "reordering invalidates every hash after it. This makes tampering detectable, "
+        "not impossible: anyone who can write the database can recompute the chain, and "
+        "deleting the newest rows leaves a consistent chain. Publishing a periodic "
+        "digest externally would close both gaps — that is roadmap, not shipped._",
+    ]
+    await cl.Message(content="\n".join(lines)).send()
 
 
 async def _kill(session_id: str) -> None:
@@ -244,6 +300,8 @@ async def handle(message: cl.Message) -> None:
         await _show_tools()
     elif cmd == "log":
         await _show_log(session_id)
+    elif cmd == "verify":
+        await _verify_chain()
     elif cmd == "kill":
         await _kill(session_id)
     elif cmd.startswith("approve "):

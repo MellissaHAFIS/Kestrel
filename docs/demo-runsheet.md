@@ -15,6 +15,9 @@ Record 2-3 takes. Start the video track EARLY, it is the only time-risky item.
 > tool we quarantined. Any figure not in `docs/defence-sheet.md` §4 does not get said out loud.
 
 ## Before you hit record (one-time setup, ~2 min)
+0. Delete `policyguard_audit.db` so the log starts empty. Rows written before the hash chain
+   existed cannot be attested, and `verify` would report "intact, but partly predates the chain"
+   on camera. A fresh file gives a clean "intact".
 1. Open two terminals at the repo root.
 2. Terminal A (the console) - start it and leave it running:
    .venv\Scripts\python.exe -m chainlit run console/app.py
@@ -22,7 +25,7 @@ Record 2-3 takes. Start the video track EARLY, it is the only time-risky item.
    (If you changed the console since last launch, Ctrl+C and relaunch so it picks up `tools`.)
 3. Terminal B (the demo) - leave at the prompt, ready to run the two acts.
 4. Open the two charts in an image viewer, ready to show:
-   - eval/results/20261010T225704Z-2c9a9aa-bedrock.png   (headline: with vs without)
+   - eval/results/20261011T040637Z-d902ca1-bedrock.png   (headline: with vs without)
    - eval/results/layers-bedrock.png                      (which layer stopped what)
 
 ## The script (what to run + what to say)
@@ -56,6 +59,12 @@ and here is exactly why."
 TYPE: queue   SAY: "The cases the guard could not decide alone, graded live by Claude on
 Amazon Bedrock, with a confidence score and a grounded reason."
 TYPE: block <paste an id from a card>   SAY: "The analyst decides. It is logged."
+TYPE: verify  SAY: "And the log can prove it was not rewritten afterwards. Every row commits to
+the hash of the one before it, so any edit breaks the chain. The analyst's override is listed as
+an override, not hidden." (If you have 10 spare seconds and want the strong version: say plainly
+that this makes tampering detectable, not impossible - whoever can write the database can
+recompute the chain. Publishing the digest externally is roadmap. Admitting the limit lands
+better with this jury than overselling.)
 TYPE: kill    SAY: "And one command stops the whole session. Fail closed."
 
 ### [2:25-3:00] The numbers (the two charts)

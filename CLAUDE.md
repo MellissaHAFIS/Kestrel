@@ -136,7 +136,16 @@ several times in separate processes before believing a green suite.
   hold sensitive data (and conflict with GDPR erasure), and on-chain writes add cost and latency.
   Do not reopen this unless the team asks. The only defensible idea: a hash-chained audit log
   (each row stores the hash of the previous one) so tampering is detectable; publishing a
-  periodic digest on-chain is a roadmap mention only. The hash chain is NOT implemented.
+  periodic digest on-chain is a roadmap mention only.
+  **The hash chain IS now implemented** (`audit.py`: `compute_row_hash`, `verify_chain`, `verify`
+  in the console, 19 tests in `tests/test_audit_chain.py`). It needed no change to the frozen
+  contract: `prev_hash`/`row_hash` are storage columns, and an amendment reuses the existing
+  `human_decision` event type. Note for anyone extending it: `update_decision` legitimately
+  mutates an already-hashed row, so the amendment is appended as its own chained event and
+  `verify_chain` separates "explained by an amendment" from "tampered". Do not try to re-sign a
+  mutated row — that breaks the next row's link, and a test pins it. Two limits are also pinned
+  by tests and must stay in the pitch: a writer can recompute the whole chain, and truncating the
+  newest rows is undetectable without an external anchor.
 - Frozen contract in `src/policyguard/types.py` (Action, Evidence, Verdict, AuditEntry,
   SourceLabel). Changing it needs all four owners to agree.
 - `Action.tool_name` is fully qualified as `"server.tool"`. Anything reading it must handle both
