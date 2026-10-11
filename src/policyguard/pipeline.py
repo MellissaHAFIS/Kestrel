@@ -194,9 +194,48 @@ async def _check_invariants(action: Action) -> Verdict | None:
     except Exception as exc:  # noqa: BLE001
         return await _layer_unavailable(action, "invariant", repr(exc))
     if result is None:
+        result = _check_cross_call(action, invariants)
+    if result is None:
         return None
     reason = getattr(result, "reason", None) or getattr(result, "report", "hard invariant violated")
     return await _instant_verdict(action, "block", 1.0, reason, layer="invariant")
+
+
+def _check_cross_call(action: Action, invariants: Any) -> Any:
+    """Chain-level canary check. Never raises: a failure here degrades to None.
+
+    Returning None is safe because every single-action rule has already run; the
+    only thing lost is the split-across-calls case, and the gate and the
+    Investigator still see the action.
+    """
+    try:
+        from policyguard import session_state
+        from policyguard.compat import as_legacy_action
+
+        return invariants.check_cross_call_canary(
+            as_legacy_action(action),
+            policy_store.policy,
+            session_state.prior_outgoing(action.session_id),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[pipeline] WARNING: cross-call canary check failed ({exc!r})")
+        return None
+
+
+def _note_outgoing(action: Action) -> None:
+    """Remember an allowed action's payload so a later split leak reassembles."""
+    try:
+        from policyguard import invariants, session_state
+        from policyguard.compat import as_legacy_action
+
+        legacy = as_legacy_action(action)
+        if policy_store.policy.is_trusted(legacy.server):
+            return  # nothing left the trust boundary
+        session_state.note_allowed_outgoing(
+            action.session_id, invariants.squashed_arg_text(legacy)
+        )
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must never break a verdict
+        print(f"[pipeline] WARNING: could not record outgoing payload ({exc!r})")
 
 
 # ── 3. ML gate ─────────────────────────────────────────────────────────────
@@ -267,9 +306,21 @@ async def _run_investigator(action: Action, llm: Any) -> Verdict:
 
 async def run_pipeline(action: Action, llm: Any = None) -> Verdict:
     """
-    Full pipeline: registry → invariants → gate → () AI agent )investigator → audit.
+    Full pipeline: registry → invariants → gate → investigator → audit.
     Returns a Verdict for every action.
+
+    Only an `allow` records the action's payload in the session accumulator: a
+    blocked or escalated call never reaches the destination, so it cannot be
+    part of an exfiltration chain.
     """
+    verdict = await _run_layers(action, llm)
+    if verdict.decision == "allow":
+        _note_outgoing(action)
+    return verdict
+
+
+async def _run_layers(action: Action, llm: Any = None) -> Verdict:
+    """The layer cascade. First final decision wins."""
     # ── 0. Kill switch ────────────────────────────────────────────────────
     # The analyst's console writes a session_kill row; nothing runs after that.
     try:

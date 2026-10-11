@@ -74,6 +74,35 @@ BUILTIN_SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
 _MAX_PATH_LEN = 300
 _B64_CHUNK = re.compile(r"[A-Za-z0-9+/_\-]{16,}={0,2}")
 
+#: Translation table for ROT13 (letters only; digits and symbols pass through).
+_ROT13_TABLE = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
+)
+
+#: Minimum number of *alphanumeric* characters of a canary that must appear
+#: contiguously for a partial match to count as a leak.
+#:
+#: Why partial matching at all: an exfiltration does not have to be complete to
+#: be a disclosure. "our token prefix is CANARY-PG-7f3a9c" hands an attacker
+#: half the honeytoken, and exact matching scored it clean.
+#:
+#: Why 14: our canaries squash to 28 alphanumeric characters, so 14 is half the
+#: token -- specific enough that an accidental collision is not realistic, while
+#: still catching a prefix truncation. A shorter floor would start matching the
+#: bare "CANARY-PG" brand prefix (8 chars), which legitimately appears in
+#: documentation *about* the honeytoken; that case must stay with the
+#: Investigator, not become a hard block.
+CANARY_PARTIAL_MIN_CHARS = 14
+
+#: Minimum run length for a fragment to contribute to the *cross-call*
+#: reassembly check. Lower than the single-call floor on purpose: here we also
+#: require that the fragments together cover the canary completely, which is a
+#: far more specific condition than one partial match, so each piece can be
+#: shorter. Eight characters is about the shortest run that is not a coincidence
+#: ("canarypg" is exactly eight).
+CANARY_FRAGMENT_MIN_CHARS = 8
+
 
 # --------------------------------------------------------------------------
 # Evidence collector
@@ -125,11 +154,21 @@ def _squash(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def _rot13(s: str) -> str:
+    """ROT13 of ``s``. Its own inverse, so one pass covers both directions."""
+    return s.translate(_ROT13_TABLE)
+
+
 def _decode_variants(s: str) -> list[str]:
     """Return decoded views of ``s`` that a canary/secret might be hiding in.
 
-    Always includes the original and a URL-decoded form. For each long base64-ish
-    chunk, adds the decoded text (standard and url-safe) when it decodes cleanly.
+    Always includes the original, a URL-decoded form and a ROT13 form. For each
+    long base64-ish chunk, adds the decoded text (standard and url-safe) when it
+    decodes cleanly, and the ROT13 of the original chunk text.
+
+    ROT13 is cheap and is a documented obfuscation in our own test set; without
+    it the "survives rot13" claim on the defence sheet was not true of this
+    layer.
     """
     variants = [s]
     try:
@@ -142,6 +181,10 @@ def _decode_variants(s: str) -> list[str]:
     for text in (s, unquoted):
         for chunk in _B64_CHUNK.findall(text):
             variants.extend(_try_base64(chunk))
+
+    # ROT13 last, over the plain forms only: rot13 of base64 is not a thing an
+    # attacker does, and it would only add noise.
+    variants.extend(_rot13(text) for text in (s, unquoted) if text)
     return variants
 
 
@@ -175,6 +218,23 @@ def _check_allowed_tool(action: Action, policy: Policy, c: _Collector) -> None:
 # --------------------------------------------------------------------------
 # Rule 2: canary in args (untrusted servers only)
 # --------------------------------------------------------------------------
+def _longest_canary_run(needle: str, haystack: str) -> int:
+    """Length of the longest contiguous slice of ``needle`` present in ``haystack``.
+
+    Both inputs are already squashed. Used to decide whether a *partial* canary
+    disclosure is long enough to count. Walks candidate lengths downward from
+    the full needle and stops at the first hit, so the common clean case costs
+    one `in` test.
+    """
+    if not needle or not haystack:
+        return 0
+    for length in range(len(needle), CANARY_PARTIAL_MIN_CHARS - 1, -1):
+        for start in range(0, len(needle) - length + 1):
+            if needle[start : start + length] in haystack:
+                return length
+    return 0
+
+
 def _check_canaries(action: Action, policy: Policy, c: _Collector) -> None:
     if policy.is_trusted(action.server):
         return
@@ -184,13 +244,20 @@ def _check_canaries(action: Action, policy: Policy, c: _Collector) -> None:
     for location, value in _walk_strings(action.args):
         for variant in _decode_variants(value):
             squashed = _squash(variant)
-            for original, needle in squashed_canaries:
-                if needle and needle in squashed:
+            for _original, needle in squashed_canaries:
+                if not needle:
+                    continue
+                if needle in squashed:
+                    c.add("canary_match", f"canary token detected in {location}")
+                    return  # one canary hit is enough to prove the leak
+                run = _longest_canary_run(needle, squashed)
+                if run:
                     c.add(
                         "canary_match",
-                        f"canary token detected in {location}",
+                        f"partial canary token detected in {location} "
+                        f"({run} of {len(needle)} characters)",
                     )
-                    return  # one canary hit is enough to prove the leak
+                    return
 
 
 # --------------------------------------------------------------------------
@@ -374,3 +441,111 @@ def check_invariants(action: Action, policy: Policy) -> Decision | None:
 
 # Backwards-compatible alias for the original skeleton entry point.
 check = check_invariants
+
+
+# --------------------------------------------------------------------------
+# Chain-level invariant: a canary reassembled across several calls
+# --------------------------------------------------------------------------
+def squashed_arg_text(action: Action) -> str:
+    """Squashed concatenation of every string in ``action.args``.
+
+    This is the form the cross-call check accumulates. Exposed so the pipeline
+    records exactly what the check will later compare against.
+    """
+    return "".join(_squash(value) for _loc, value in _walk_strings(action.args))
+
+
+def canary_coverage(needle: str, fragment: str) -> set[int]:
+    """Indices of ``needle`` disclosed by ``fragment``.
+
+    Both squashed. A position counts as disclosed only if it sits inside a run
+    of at least `CANARY_FRAGMENT_MIN_CHARS` consecutive canary characters that
+    appear verbatim in the fragment. Comparing each fragment against the canary
+    independently is what makes this immune to padding between calls.
+    """
+    covered: set[int] = set()
+    if not needle or not fragment:
+        return covered
+    n = len(needle)
+    for start in range(n):
+        # Longest run of needle starting at `start` that occurs in fragment.
+        longest = 0
+        for length in range(n - start, CANARY_FRAGMENT_MIN_CHARS - 1, -1):
+            if needle[start : start + length] in fragment:
+                longest = length
+                break
+        if longest:
+            covered.update(range(start, start + longest))
+    return covered
+
+
+def check_cross_call_canary(
+    action: Action, policy: Policy, prior_fragments: list[str]
+) -> Decision | None:
+    """Catch a canary assembled across several calls, none of which matches alone.
+
+    Deterministic in (action, policy, prior_fragments): the state is passed in,
+    never read from a global, so a decision stays replayable.
+
+    The test is *positional coverage*, not string containment. Each call
+    discloses a set of canary character positions; the session accumulates them.
+    When the union covers the whole token, the honeytoken has been handed over
+    in pieces and that is an exfiltration regardless of how it was spread out.
+
+    Two guards against noise:
+      * a position only counts inside a run of >= CANARY_FRAGMENT_MIN_CHARS, so
+        incidental short overlaps contribute nothing;
+      * full coverage is required, and the current call must disclose something
+        the session did not already have. Otherwise every call after a leak
+        would be blocked for a leak that already completed.
+    """
+    if policy.is_trusted(action.server):
+        return None
+    current = squashed_arg_text(action)
+    if not current:
+        return None
+
+    for canary in policy.canaries:
+        needle = _squash(canary)
+        if len(needle) < CANARY_FRAGMENT_MIN_CHARS:
+            continue
+
+        current_cover = canary_coverage(needle, current)
+        if not current_cover:
+            continue  # this call discloses nothing; nothing to accumulate
+
+        prior_cover: set[int] = set()
+        for fragment in prior_fragments:
+            prior_cover |= canary_coverage(needle, fragment)
+
+        if len(prior_cover) == len(needle):
+            continue  # already fully disclosed earlier; not this call's doing
+        if not (current_cover - prior_cover):
+            continue  # adds nothing new
+
+        if len(prior_cover | current_cover) < len(needle):
+            continue  # still incomplete
+
+        evidence = [
+            Evidence(
+                id="inv-x1",
+                kind="canary_reassembled",
+                detail=(
+                    f"a canary token is fully disclosed by this call combined with "
+                    f"{len(prior_fragments)} earlier call(s) in the same session; "
+                    f"no single call contains it "
+                    f"(this call adds {len(current_cover - prior_cover)} of "
+                    f"{len(needle)} characters)"
+                ),
+            )
+        ]
+        return Decision(
+            verdict=Verdict.BLOCK,
+            layer="invariants",
+            reason="hard invariant violated: canary_reassembled",
+            score=1.0,
+            confidence=1.0,
+            evidence_ids=[e.id for e in evidence],
+            evidence=evidence,
+        )
+    return None
