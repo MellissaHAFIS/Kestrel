@@ -45,8 +45,11 @@ ML gate let 2 through. (See eval/results/layers-bedrock.png.)
 - Small, custom test set, written by us. Not an independent benchmark.
 - Scripted replay: we assume the agent attempts every step, so the "without guard" numbers hold by construction.
   An LLM-driven agent might behave differently.
-- Two attacks slipped past the ML gate: a truncated canary and a canary split across two calls.
-  That is our weakest layer and the next thing to harden.
+- Two attacks slipped past the ML gate: a 16-character truncated canary and a canary split across two
+  calls so no single message held it whole. By design the gate is a cheap, fast first filter, not a
+  guarantee; defeating exact and encoded matches is what the later layers exist for. In production the
+  destination canary tripwire and the Investigator still cover these. Adding a canary-fragment signal to
+  the gate is a clear, scoped next step. The gate also produced zero false alarms on 25 benign steps.
 - An escalation counts as "stopped" in the headline (unanswered escalations fail closed to BLOCK);
   we also report the worst case where every escalation is approved.
 - We did not tune thresholds on this set.
