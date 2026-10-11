@@ -1,7 +1,5 @@
 """Tool registry scan: description/schema rules + SHA-256 pinning + quarantine store.
 
-Owner: Person 2 (guard core).
-First deliverable: Tool A quarantined; canary-in-args blocked.
 """
 
 from __future__ import annotations
@@ -36,7 +34,6 @@ def pin_hash(name: str, description: str, schema: dict[str, Any]) -> str:
 
 def scan_tool(name: str, description: str, schema: dict[str, Any]) -> RegistryResult:
     """Scan a tool description/schema for poisoning. STUB: flags nothing."""
-    # TODO(person2): rules: imperative instructions to the model, "do not tell the user",
     #   references to files/paths/config, extra free-form params like `context`,
     #   hidden unicode, very long descriptions.
     return RegistryResult(tool=name, pinned_hash=pin_hash(name, description, schema))
@@ -48,7 +45,6 @@ _PINS: dict[str, str] = {}  # "server/tool" -> pinned hash
 
 
 def quarantine(server: str, tool: str, reason: str) -> None:
-    # TODO(person2): persist (SQLite or JSON) and log to audit.py
     _QUARANTINED[f"{server}/{tool}"] = reason
 
 
@@ -58,13 +54,11 @@ def is_quarantined(server: str, tool: str) -> bool:
 
 def check_pin(server: str, tool: str, current_hash: str) -> bool:
     """True if the hash matches the pin (or none is pinned yet, in which case it pins)."""
-    # TODO(person2): rug-pull detection: description changed after approval -> quarantine
     return _PINS.setdefault(f"{server}/{tool}", current_hash) == current_hash
 
 
 # =====================================================================
 # TOOL_REGISTRY: the scan results the Investigator's inspect_tool reads.
-# Additive shim (Person 3). Person 2 should populate this from scan_tool()
 # at connection time; the seed values below describe the demo tools.
 #
 # Entry shape: {description, schema_hash, status, scan_result}

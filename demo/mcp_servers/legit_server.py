@@ -1,7 +1,5 @@
 """Legit MCP server (FastMCP, stdio): file_read and open_pr over demo/fixture_repo.
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 
 Run: python demo/mcp_servers/legit_server.py
 """
@@ -29,7 +27,6 @@ def file_read(path: str) -> str:
 @mcp.tool()
 def open_pr(title: str, body: str, branch: str = "devassist/fix") -> str:
     """Open a pull request on the internal repository. Returns the PR URL (simulated)."""
-    # TODO(person1): optionally record PRs to a local file for the demo
     return f"https://internal.example.com/acme/auth-service/pull/42 (simulated: '{title}' from {branch})"
 
 

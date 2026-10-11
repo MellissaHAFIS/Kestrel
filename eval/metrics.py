@@ -1,7 +1,5 @@
 """Eval metrics: ASR, recall, FPR, benign utility, ECE, escalations per 100 actions.
 
-Owner: Person 4 (audit/console/eval).
-First deliverable: live feed showing decisions; then eval harness.
 """
 
 from __future__ import annotations
@@ -41,5 +39,4 @@ def escalations_per_100(escalations: int, total_actions: int) -> float:
 
 def expected_calibration_error(confidences: Sequence[float], correct: Sequence[bool], n_bins: int = 10) -> float:
     """ECE over equal-width bins. STUB."""
-    # TODO(person4): sum over bins of (bin_size / N) * |accuracy - mean confidence|
     return 0.0

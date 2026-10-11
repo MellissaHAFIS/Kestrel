@@ -68,7 +68,6 @@ def load_policy(path: str | Path) -> Policy:
 
 # =====================================================================
 # PolicyStore: read-only accessor used by the Investigator tools.
-# Additive shim (Person 3). Does not change load_policy/Policy above.
 # =====================================================================
 
 

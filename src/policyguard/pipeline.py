@@ -1,6 +1,5 @@
 """Pipeline: the single integration seam, run_pipeline(action, llm) -> Verdict.
 
-Owner: Person 2 (guard core). Investigator step wired by Person 3.
 
 Order of layers (first final decision wins):
     kill switch -> registry -> invariants -> gate -> investigator

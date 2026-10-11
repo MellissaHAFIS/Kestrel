@@ -1,7 +1,5 @@
 """ML gate: cheap, fast, fixed-weight score for every action.
 
-Owner: Person 2 (guard core).
-First deliverable: Tool A quarantined; canary-in-args blocked.
 """
 
 from __future__ import annotations
@@ -26,7 +24,6 @@ def score(action: Action) -> float:
     every action fall below `gate_low`, which silently allowed everything and
     meant the Investigator was never reached.
     """
-    # TODO(person2): load the classifier lazily (extra 'ml') and fall back to
     #   _heuristic_score on any load error. Log the model hash with every decision.
     return _heuristic_score(action)
 

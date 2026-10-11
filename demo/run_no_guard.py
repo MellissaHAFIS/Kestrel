@@ -1,7 +1,5 @@
 """Act 1: run DevAssist with NO guard. The leak must be reproducible (see demo/leak_log.jsonl).
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 
 Run: python -m demo.run_no_guard [--llm]
 """

@@ -1,1 +1,1 @@
-"""PolicyGuard evaluation harness (Person 4)."""
+"""Kestrel evaluation harness."""
