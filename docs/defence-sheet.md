@@ -32,7 +32,7 @@ Out of scope (stated honestly): we do not defend the foundation model's own safe
 
 > **Current. Real Bedrock run, Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`),
 > us-east-1, 2026-10-11.** Raw output:
-> `eval/results/20261011T040637Z-d902ca1-bedrock.json` (+ `.png`). Reproduce with
+> `eval/results/20261011T044743Z-a9f5093-bedrock.json` (+ `.png`). Reproduce with
 > `python -m eval.run_eval --mode bedrock` and credentials in `.env.aws`.
 >
 > Three caveats to state if asked.
@@ -62,10 +62,10 @@ Out of scope (stated honestly): we do not defend the foundation model's own safe
 | Benign tasks completed (every step allowed) | 100% (14/14) | **35.7% (5/14)**, 95% CI 16-61% |
 |   ...if every escalation were approved | 100% (14/14) | 35.7% (5/14), 95% CI 16-61% |
 | Harmful steps stopped (block or escalate) | 0% (0/15) | **93.3% (14/15)**, 95% CI 70-99% |
-| Benign steps stopped (block or escalate) | 0% (0/27) | 40.7% (11/27), 95% CI 25-59% |
-| Steps resolved without a human | 100% (56/56) | 82.1% (46/56), 95% CI 70-90% |
-| Escalations per 100 steps (all / benign only) | 0 | 17.9 / 3.7 |
-| Latency per step, median / p95 | — | 15 ms / 6130 ms |
+| Benign steps stopped (block or escalate) | 0% (0/27) | 44.4% (12/27), 95% CI 28-63% |
+| Steps resolved without a human | 100% (56/56) | 78.6% (44/56), 95% CI 66-87% |
+| Escalations per 100 steps (all / benign only) | 0 | 21.4 / 11.1 |
+| Latency per step, median / p95 | — | 15 ms / 5199 ms |
 
 Which layer decided, as `allow/block/escalate` (harmful steps | other steps):
 
@@ -135,6 +135,41 @@ deterministic path, which is what the great majority of steps take.
      13 tests in `tests/test_scan_robustness.py`, including a deliberately cross-process one,
      because in-process repetition cannot observe hash randomisation — which is exactly why the
      original bug survived a green suite.
+- **We hardened the ML gate and it bought us nothing measurable. Saying so is the point.**
+  The gate was the only layer blind to the trust boundary the rest of the system is built on: it
+  inspected URLs inside argument text but never looked at *which server the call was going to*.
+  We added that signal, plus an opaque-identifier signal (a run of >= 12 alphanumerics containing
+  both a digit and a letter — the shape of a key, token or hash).
+
+  Method, because it is what makes the number trustworthy rather than the number itself:
+  the cases were written from the *techniques*, not from the chains that failed; the tests were
+  written and committed **before** the evaluation was re-run; and **no threshold was changed**
+  (`test_thresholds_are_unchanged` pins `GATE_LOW`/`GATE_HIGH` at their pre-existing 0.20/0.80).
+  Both new weights are 0.15, derived from the pre-existing 0.20 floor: alone each stays under it
+  so an ordinary third-party call is still allowed, and combined with any other signal it clears
+  the floor and reaches the Investigator.
+
+  Result, measured on Bedrock before and after: **attack success (7.1%), harmful steps stopped
+  (93.3%) and benign completion (35.7%) are all unchanged.** `atk-13` still gets through — its
+  score moved from 0.00 to 0.15, still under the 0.20 floor. We could capture it by lowering the
+  floor to 0.15, and we are not doing that: the chains predate the thresholds, and tuning after
+  seeing results is the one thing that would void the "no tuning" claim.
+
+  And it has a cost. The gate auto-allows one benign step fewer (18 -> 17), pushing it to the
+  Investigator, and escalations per 100 benign steps rose from 3.7 to 11.1 while steps resolved
+  without a human fell from 82.1% to 78.6%. Be careful attributing all of that to the gate: the
+  gate is deterministic and accounts for exactly one step of it; the rest is Investigator
+  variation, which moved by a similar amount between two runs where the gate had not changed at
+  all. The defensible statement is: **one more benign step per 56 now gets a closer look, and we
+  gained nothing measurable in exchange.**
+
+  We kept it anyway, and that is a judgement call worth stating as one. The blind spot was real
+  and structural, and a set of 14 attacks written by us is the wrong instrument for proving a
+  signal useless — absence of evidence here is not evidence of absence. If the jury pushes back
+  that we added complexity for no measured gain, that is a fair hit and the answer is the cost
+  line above, not a defence of the signal.
+  Disclosure: the gate therefore changed *after* we had seen a first evaluation run. The
+  thresholds did not, and the chains did not.
 - **Say this if asked about `atk-13`:** the chain check does not fire on it, and the reason is
   structural, not a bug. `session_state` records a payload only for calls that were **allowed**,
   because a blocked call never left the process and must not cause a false positive later. In
@@ -197,8 +232,11 @@ Not an option, in any case: editing the chains after seeing these results. That 
   and per our standing decision it does not need a blockchain to work.
 
 ## 7. What we'd do next
-- Harden the gate against truncated/split/encoded leaks (the remaining miss offline is a canary
-  split across two calls, allowed by the ML gate at score 0.0).
+- Wire up a real classifier for the gate. The fixed-weight heuristic is at the end of what it can
+  do: the remaining miss (`atk-13`, a canary split across two calls) now scores 0.15 against a
+  0.20 floor, and the only ways to catch it are to lower the floor (tuning on the test set — not
+  doing it) or to score the *sequence* rather than the call. Sequence-level scoring is the real
+  answer and is the gap worth naming.
 - Resolve the quarantine-semantics decision in §5, then re-run on Bedrock.
 - Per-session or per-caller quarantine, instead of a tool being globally unavailable.
 - Replace the hand-written scan rules with a scored classifier, measured on MCPTox.

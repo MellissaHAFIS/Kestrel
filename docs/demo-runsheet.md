@@ -25,7 +25,7 @@ Record 2-3 takes. Start the video track EARLY, it is the only time-risky item.
    (If you changed the console since last launch, Ctrl+C and relaunch so it picks up `tools`.)
 3. Terminal B (the demo) - leave at the prompt, ready to run the two acts.
 4. Open the two charts in an image viewer, ready to show:
-   - eval/results/20261011T040637Z-d902ca1-bedrock.png   (headline: with vs without)
+   - eval/results/20261011T044743Z-a9f5093-bedrock.png   (headline: with vs without)
    - eval/results/layers-bedrock.png                      (which layer stopped what)
 
 ## The script (what to run + what to say)
