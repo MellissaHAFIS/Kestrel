@@ -1,9 +1,9 @@
-# Defence Sheet - PolicyGuard
+# Defence Sheet - Kestrel
 
-Protected agent: DevAssist. Results from a real run - Claude Haiku 4.5 on Amazon Bedrock (us-east-1), commit 2c9a9aa. Every number traces to `eval/results/20261010T225704Z-2c9a9aa-bedrock.json`.
+Kestrel (formerly PolicyGuard). Protected agent: DevAssist. Results from a real run - Claude Haiku 4.5 on Amazon Bedrock (us-east-1), commit 2c9a9aa. Every number traces to `eval/results/20261010T225704Z-2c9a9aa-bedrock.json`.
 
 ## 1. Threat scenario addressed
-An AI coding agent uses tools from a third-party (MCP) server. A poisoned tool description instructs the agent to read a secret (a canary in `config/settings.yaml`) and pass it to an untrusted server, while every individual tool call looks legitimate. PolicyGuard supervises what the agent DOES across the tool chain and stops the leak, including obfuscated variants (encoded, truncated, or split across calls) and multi-step read-then-leak chains. Precedent: EchoLeak (CVE-2025-32711, Microsoft 365 Copilot).
+An AI coding agent uses tools from a third-party (MCP) server. A poisoned tool description instructs the agent to read a secret (a canary in `config/settings.yaml`) and pass it to an untrusted server, while every individual tool call looks legitimate. Kestrel supervises what the agent DOES across the tool chain and stops the leak, including obfuscated variants (encoded, truncated, or split across calls) and multi-step read-then-leak chains. Precedent: EchoLeak (CVE-2025-32711, Microsoft 365 Copilot).
 
 ## 2. NIST CSF functions covered
 - **Identify**: tool registry scan inventories and risk-rates every MCP tool at connection; policy declares trusted/untrusted servers, sensitive paths, and canaries.

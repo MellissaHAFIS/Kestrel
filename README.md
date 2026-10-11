@@ -1,9 +1,9 @@
 # secure-horizons-hackathon
 AI-powered cybersecurity solution built at Secure Horizons 2026. Exploring intelligent, proactive, and secure AI systems.
 
-## PolicyGuard
+## Kestrel (formerly PolicyGuard)
 
-PolicyGuard supervises an AI agent's tool use (including the MCP tool supply chain) and hands a grounded, uncertainty-scored case to a human analyst when it cannot decide. The protected agent is DevAssist. Architecture: `docs/ideas.md`. This repo layout supersedes `docs/devlopment_plan.md` (Python-only stack, Chainlit console).
+Kestrel supervises an AI agent's tool use (including the MCP tool supply chain) and hands a grounded, uncertainty-scored case to a human analyst when it cannot decide. The protected agent is DevAssist. Architecture: `docs/ideas.md`. This repo layout supersedes `docs/devlopment_plan.md` (Python-only stack, Chainlit console).
 
 Status: **skeleton**. Every module is a stub with the final signatures so four people can build in parallel. Search for `TODO(person1..4)`.
 
@@ -18,7 +18,7 @@ cp .env.example .env              # MOCK_LLM=1 runs fully offline
 chainlit run console/app.py       # analyst console (fake incidents for now)
 
 python -m demo.run_no_guard       # Act 1: the attack works, see demo/leak_log.jsonl
-python -m demo.run_guarded        # Act 2: same task behind PolicyGuard
+python -m demo.run_guarded        # Act 2: same task behind Kestrel
 python -m eval.run_eval              # benchmark: with vs without the guard (see Benchmark below)
 ```
 

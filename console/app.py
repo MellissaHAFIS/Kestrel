@@ -77,7 +77,7 @@ async def start() -> None:
     cl.user_session.set("killed", False)
     await cl.Message(
         content=(
-            f"🛡️  **PolicyGuard Analyst Console**\n\n"
+            f"🛡️  **Kestrel Analyst Console**\n\n"
             f"Console session: `{session_id}`\n\n"
             f"Policy: {policy_store.summary()}\n\n"
             f"Commands:\n"

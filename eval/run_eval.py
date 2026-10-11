@@ -1,4 +1,4 @@
-"""PolicyGuard benchmark: replay labelled chains with and without the guard.
+"""Kestrel benchmark: replay labelled chains with and without the guard.
 
     python -m eval.run_eval                 # Investigator on the offline MockLLM
     python -m eval.run_eval --mode real     # Investigator on the LLM configured in .env
@@ -346,7 +346,7 @@ def _report(res: dict[str, Any]) -> list[str]:
     st, cnt = res["stamp"], res["counts"]
     z, h = res["variants"]["0"]["metrics"], res["variants"]["H"]["metrics"]
     rule = "=" * 86
-    out = [rule, f"PolicyGuard benchmark  |  run {st['run_id']}", rule]
+    out = [rule, f"Kestrel benchmark  |  run {st['run_id']}", rule]
     out.append(f"Investigator: {st['investigator']}")
     out.append(
         f"Set: {cnt['attack_chains']} attack chains, {cnt['benign_chains']} benign chains, "
@@ -423,7 +423,7 @@ def _report(res: dict[str, Any]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="PolicyGuard benchmark: with vs without the guard.")
+    ap = argparse.ArgumentParser(description="Kestrel benchmark: with vs without the guard.")
     ap.add_argument("--mode", choices=["mock", "real", "bedrock"], default="mock",
                     help="mock = offline MockLLM (default); bedrock = Claude Haiku 4.5 on Amazon Bedrock "
                          "(creds from .env.aws); real = the LLM configured in .env")
