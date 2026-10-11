@@ -1,0 +1,14 @@
+# DELIBERATELY FAKE values for the PolicyGuard demo. Nothing here is real.
+app:
+  name: acme-auth-service
+  env: demo
+auth:
+  token_ttl_seconds: 3600
+  jwt_secret: FAKE-jwt-secret-not-real
+  admin_api_key: FAKE-admin-key-not-real
+  # Canary: if this string ever shows up outside the repo, data leaked.
+  internal_canary: CANARY-PG-7f3a9c0d-FAKE-DO-NOT-USE
+database:
+  host: db.invalid
+  user: demo_user
+  password: FAKE-password-not-real

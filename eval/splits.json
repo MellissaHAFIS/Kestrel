@@ -1,0 +1,28 @@
+{
+  "_comment": "Written BEFORE any tuning. Do not edit after looking at validation/test results.",
+  "rules": {
+    "split_unit": "server/template, NOT random rows. All variants of one template/server go to the same split.",
+    "synthetic_data": "train only. Synthetic or LLM-augmented examples never appear in validation or test.",
+    "thresholds": "tuned on validation only, then frozen. Test is run once on frozen thresholds."
+  },
+  "roles": {
+    "train": {
+      "purpose": "fit/inspect models, write rules, synthetic augmentation allowed",
+      "tool_description_servers": [],
+      "tool_description_templates": [],
+      "chain_ids": []
+    },
+    "validation": {
+      "purpose": "tune gate_low, gate_high, investigator_min_confidence",
+      "tool_description_servers": [],
+      "tool_description_templates": [],
+      "chain_ids": []
+    },
+    "test": {
+      "purpose": "single final run for the headline table (ASR, recall/FPR, benign utility, ECE)",
+      "tool_description_servers": [],
+      "tool_description_templates": [],
+      "chain_ids": []
+    }
+  }
+}
