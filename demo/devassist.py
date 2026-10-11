@@ -1,7 +1,5 @@
 """DevAssist: LangGraph agent that loads MCP tools (optionally through the PolicyGuard middleware).
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 
 MCP loading decision: the installed langchain (1.4.4) has a `langchain.mcp`
 namespace (MCPAdapter), but it is marked beta and its import fails unless the

@@ -34,3 +34,13 @@ eval/results/
 chainlit.md
 .files/
 .DS_Store
+
+# Local media, decks, archives, and the optional ledger PoC (not part of the submission tree)
+*.mp4
+*.zip
+*.pptx
+*.html
+_clips/
+ledger_1/
+.kiro/specs/policyguard-benchmark/
+powershell - secure-horizons-hackathon*/

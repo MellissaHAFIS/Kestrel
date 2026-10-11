@@ -1,6 +1,5 @@
 """Middleware: wraps MCP/LangChain tools, builds an Action per call, runs the pipeline, enforces the Verdict.
 
-Owner: Person 1 (demo env).
 
 CORRECTED against the frozen contract in types.py, which no longer exports
 `Source` or `Decision` and whose `Action` carries a single `tool_name` plus a

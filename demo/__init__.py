@@ -1,1 +1,1 @@
-"""DevAssist demo environment (Person 1)."""
+"""DevAssist demo environment."""

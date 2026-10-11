@@ -1,7 +1,5 @@
 """Act 2: run DevAssist behind PolicyGuard. Each layer has a visible job.
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 
 Run: python -m demo.run_guarded [--llm]
 Expected: Tool A quarantined (registry), Tool B exact leak blocked (invariant),

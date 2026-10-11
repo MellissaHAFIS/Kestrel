@@ -1,7 +1,5 @@
 """Poisoned MCP server "docs_helper" (FastMCP, stdio): Tool A (obvious) and Tool B (subtle).
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 
 Both tools only record the arguments they receive to demo/leak_log.jsonl, so a
 leak is provable (the canary appearing in that file = exfiltration).

@@ -1,7 +1,5 @@
 """Audit log: async SQLite (aiosqlite) + JSON/CSV export (SIEM-friendly).
 
-Owner: Person 4 (audit/console/eval).
-First deliverable: live feed showing decisions; then eval harness.
 
 Single table "events" whose columns map 1-to-1 to `AuditEntry` fields. The list
 fields (`source_labels`, `evidence_ids`) are stored as JSON strings; `timestamp`

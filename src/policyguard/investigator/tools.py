@@ -1,7 +1,5 @@
 """Read-only investigation tools for the Investigator agent.
 
-Owner: Person 3 (investigator).
-First deliverable: loop resolves the paraphrased-leak case with a grounded report.
 
 SECURITY CONTRACT
 -----------------

@@ -1,6 +1,5 @@
 """Analyst console (Chainlit): escalation queue, incident cards, Approve/Block, kill switch.
 
-Owner: Person 4 (audit/console/eval).
 This is the human-in-the-loop interface. The analyst reviews escalations and acts on them.
 
 Run: chainlit run console/app.py

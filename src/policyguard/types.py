@@ -1,7 +1,7 @@
 """PolicyGuard shared contract: SourceLabel, Action, Evidence, Verdict, AuditEntry.
 
 # =====================================================================
-# FROZEN CONTRACT: changing this needs all four owners to agree.
+# FROZEN CONTRACT: do not change without updating every consumer.
 # =====================================================================
 
 Every component builds against these types.

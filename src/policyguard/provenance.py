@@ -1,7 +1,5 @@
 """Provenance: tag content by Source and keep a per-session history of tagged content.
 
-Owner: Person 1 (demo env).
-First deliverable: attack works with no guard; every call produces an Action.
 """
 
 from __future__ import annotations
@@ -24,7 +22,6 @@ _HISTORY: dict[str, list[TaggedContent]] = {}
 
 def tag(session_id: str, content: str, source: Source) -> TaggedContent:
     """Tag `content` with its `source` and append it to the session history."""
-    # TODO(person1): hook into middleware for user input, tool descriptions and tool results
     item = TaggedContent(content=content, source=source)
     _HISTORY.setdefault(session_id, []).append(item)
     return item
@@ -37,7 +34,6 @@ def history(session_id: str) -> list[TaggedContent]:
 
 def sources_for(session_id: str) -> list[Source]:
     """Distinct sources seen so far in the session; feeds Action.sources."""
-    # TODO(person1): order/limit to content that could influence the next action
     seen: list[Source] = []
     for item in _HISTORY.get(session_id, []):
         if item.source not in seen:

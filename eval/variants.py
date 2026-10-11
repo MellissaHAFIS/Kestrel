@@ -1,7 +1,5 @@
 """Eval variants 0, R, M, A, I, H behind one common interface.
 
-Owner: Person 4 (audit/console/eval).
-First deliverable: live feed showing decisions; then eval harness.
 
 Each variant maps an Action to a Decision. `evaluate_chain` runs a chain's steps
 and the harness decides whether the attack succeeded (an attack step was ALLOWed).
@@ -29,7 +27,6 @@ class _Base:
     description = ""
 
     def decide(self, action: Action) -> Decision:
-        # TODO(person4): implement per variant using policyguard layers
         return Decision(Verdict.ALLOW, f"variant-{self.name}", reason="stub")
 
 
