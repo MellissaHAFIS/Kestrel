@@ -148,6 +148,10 @@ class Signals:
     sensitive_path: bool = False
     untrusted_source: bool = False
     clean_checks: int = 0
+    #: A scan ran but could not produce a verdict (timeout, missing scanner,
+    #: unparseable output). Not a violation -- we know nothing -- but it must
+    #: never read as evidence of cleanliness. See `compute_confidence`.
+    scan_failed: bool = False
 
     @property
     def violating(self) -> bool:
@@ -177,7 +181,13 @@ def extract_signals(evidence: list[Evidence], sources: list[str] | None = None) 
                 s.secret_hit = True
             if data.get("canary_hit"):
                 s.canary_hit = True
-            if not data.get("secrets_found") and not data.get("canary_hit"):
+            if data.get("scan_ok") is False:
+                # The scanner failed, so "nothing found" is not a finding.
+                # Counting it as a clean check used to *raise* allow-confidence,
+                # which means a broken scanner argued for letting the action
+                # through. Record the failure instead and let the floor escalate.
+                s.scan_failed = True
+            elif not data.get("secrets_found") and not data.get("canary_hit"):
                 s.clean_checks += 1
         elif item.tool_name == "check_canary":
             if data.get("hit"):
@@ -221,6 +231,12 @@ _ALLOW_PER_CLEAN_CHECK = 0.15
 _ALLOW_CAP = 0.95
 _UNTRUSTED_SOURCE_PENALTY = 0.20
 
+#: Ceiling on allow-confidence when a scan failed to produce a verdict.
+#: Derived from the floor rather than hard-coded so the two cannot drift: it
+#: must stay strictly below `DEFAULT_MIN_CONFIDENCE`, which is what forces
+#: `apply_verdict_floor` to escalate to a human instead of allowing.
+_SCAN_FAILED_ALLOW_CAP = round(DEFAULT_MIN_CONFIDENCE - 0.01, 4)
+
 
 def compute_confidence(signals: Signals, decision: str) -> float:
     """Confidence in the RETURNED VERDICT, computed from evidence alone.
@@ -245,6 +261,10 @@ def compute_confidence(signals: Signals, decision: str) -> float:
     `apply_verdict_floor` cannot be satisfied by an allow that contradicts its
     own evidence.
 
+    A failed scan (`signals.scan_failed`) caps allow-confidence just below the
+    floor. "We could not look" is not "we looked and it was clean", and the
+    difference has to fall on the safe side: the action goes to a human.
+
     Returns a value in [0.0, 1.0]. The model never supplies this; it may only
     lower the result via `apply_model_confidence`.
     """
@@ -261,6 +281,11 @@ def compute_confidence(signals: Signals, decision: str) -> float:
     score = _ALLOW_BASE + _ALLOW_PER_CLEAN_CHECK * signals.clean_checks
     if signals.untrusted_source:
         score -= _UNTRUSTED_SOURCE_PENALTY
+    if signals.scan_failed:
+        # We did not establish that the content is clean; we failed to look.
+        # Cap below the allow floor so the action goes to a human rather than
+        # through. Fails closed, consistent with FAIL_CLOSED_ON_LAYER_ERROR.
+        score = min(score, _SCAN_FAILED_ALLOW_CAP)
     return round(max(0.0, min(score, _ALLOW_CAP)), 4)
 
 

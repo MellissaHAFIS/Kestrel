@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -134,6 +135,24 @@ def _parse_detect_secrets(stdout: str) -> dict[str, Any]:
     }
 
 
+def _scan_env() -> dict[str, str]:
+    """Environment for the scanner subprocess, pinned for reproducibility.
+
+    `PYTHONHASHSEED=0` is load-bearing, not hygiene. detect-secrets'
+    HexHighEntropyString plugin picks which candidate substring to score by
+    iterating a set, so the interpreter's per-process hash randomisation makes
+    it return *different verdicts for identical input*. Measured on the
+    Investigator's own leak fixture: 3 of 6 identical runs reported the secret,
+    3 reported nothing, which propagated all the way to the final verdict
+    (block vs escalate) and was the real cause of the "flaky" Investigator
+    tests. A guard whose decision is not reproducible cannot be audited, so the
+    seed is pinned here and the scan is deterministic for a given input.
+    """
+    env = dict(os.environ)
+    env["PYTHONHASHSEED"] = "0"
+    return env
+
+
 def _run_detect_secrets(text: str) -> dict[str, Any]:
     """Run detect-secrets over `text` via stdin. No shell: input is never interpreted."""
     try:
@@ -144,6 +163,7 @@ def _run_detect_secrets(text: str) -> dict[str, Any]:
             text=True,
             timeout=_SCAN_TIMEOUT,
             shell=False,
+            env=_scan_env(),
         )
     except subprocess.TimeoutExpired:
         return {"error": "detect-secrets timed out", "plugins": {}, "triggered": []}
@@ -179,6 +199,13 @@ async def scan_secrets(text: str) -> str:
 
     return _json(
         {
+            # False when the scanner itself failed (timeout, missing binary,
+            # unparseable output). Without this flag a failed scan is
+            # indistinguishable from a clean one, and the verifier counted it as
+            # evidence of cleanliness -- a fail-open in a security component.
+            # `verifier.extract_signals` reads it and refuses to treat the
+            # result as a clean check.
+            "scan_ok": not output.get("error"),
             "secrets_found": secrets_found or canary_hit,
             "canary_hit": canary_hit,
             "canary_token": canary_token,

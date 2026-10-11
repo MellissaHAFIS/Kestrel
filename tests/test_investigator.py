@@ -32,7 +32,14 @@ from policyguard.investigator.verifier import (
 )
 from policyguard.types import Action, Evidence
 
-CANARY = "CANARY-7f3a9c21-DO-NOT-USE"
+#: Must be a canary the *policy* declares, otherwise `scan_secrets` reports no
+#: canary hit and these tests end up asserting on whatever detect-secrets
+#: happens to think of the string. The previous value
+#: ("CANARY-7f3a9c21-DO-NOT-USE") was not in policy/devassist.yaml, so
+#: `test_paraphrased_leak_ends_in_grounded_block` was really testing the
+#: HexHighEntropyString plugin -- which answered non-deterministically and made
+#: the test look flaky. See `tools._scan_env`.
+CANARY = "CANARY-PG-7f3a9c0d-FAKE-DO-NOT-USE"
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────

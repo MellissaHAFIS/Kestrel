@@ -49,3 +49,8 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 # The Investigator and the audit log are async; let pytest-asyncio drive them.
 asyncio_mode = "auto"
+markers = [
+    # Spawns real subprocesses (the secret scanner) to observe behaviour that
+    # only appears across processes. Deselect with: -m "not slow"
+    "slow: spins up subprocesses; a few seconds rather than milliseconds",
+]
