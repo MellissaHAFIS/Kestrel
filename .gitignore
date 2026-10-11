@@ -8,7 +8,9 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .coverage
-.venv/
+# Any local interpreter env. The pins need 3.12 for chainlit, so a box may
+# carry several side by side (.venv312, .venv-pg); none of them belong in git.
+.venv*/
 venv/
 
 # Node

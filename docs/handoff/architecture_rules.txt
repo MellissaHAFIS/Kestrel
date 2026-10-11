@@ -1,0 +1,102 @@
+Step 2: Architecture Design (25 min)
+Using a whiteboard, draw.io, or a shared document, sketch your solution architecture. Address these components:
+
+Data Layer
+Where does your input data come from? (S3, API, database, user input)
+How will you store and index it? (OpenSearch, Bedrock Knowledge Base, DynamoDB)
+What's your embedding strategy? (Titan Embeddings, chunk size, metadata)
+Intelligence Layer
+Which models will you use and for what? (Claude for reasoning, Haiku for classification, Titan for embeddings)
+What's your prompting strategy? (System prompts, few-shot examples, chain-of-thought)
+Do you need agents? How many? What tools do they have?
+Orchestration Layer
+Is this single-model or multi-step?
+Who orchestrates? (AgentCore, Lambda step function, custom Python)
+How do you handle failures and retries?
+Interface Layer
+How will users interact? (Chat UI, API, Streamlit app, notebook)
+What does the output look like? (Text, structured data, reports, actions)
+Architecture Template
+Layer	Components	Purpose
+USER INTERFACE	Streamlit / React / API Gateway	User-facing frontend
+↓		
+ORCHESTRATION	AgentCore / Lambda / Custom Python	Route requests, manage agents
+→ Agent 1 (Research)	Search and synthesize information
+→ Agent 2 (Writer)	Generate content from findings
+→ Classification (Routing)	Triage and route inputs
+↓		
+INTELLIGENCE	Bedrock Claude Sonnet 4.5	Reasoning, generation
+Bedrock Haiku	Classification, fast tasks
+Titan Embeddings	Vector embeddings for search
+↓		
+DATA LAYER	OpenSearch (Vector Store)	Semantic search, RAG retrieval
+S3 (Documents)	Raw document storage
+DynamoDB (Sessions)	Conversation memory, state
+Customize this template for your specific solution.
+
+Step 3: Define Agent Workflows (10 min)
+If your solution uses agents, define each agent's:
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+Agent: [Name]
+  Purpose: [What does this agent do?]
+  Model: [Which Bedrock model?]
+  Tools:
+    - [Tool 1]: [What it does]
+    - [Tool 2]: [What it does]
+  Input: [What triggers this agent?]
+  Output: [What does it produce?]
+  Guardrails:
+    - [Safety check 1]
+    - [Content filter]
+
+Example:
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+Agent: Research Agent
+  Purpose: Search knowledge base and synthesize findings
+  Model: Claude Sonnet 4.5
+  Tools:
+    - opensearch_query: Semantic search over indexed documents
+    - web_search: Fetch real-time information (if applicable)
+    - summarize: Condense long documents into key points
+  Input: User question + context from orchestrator
+  Output: Structured findings with source citations
+  Guardrails:
+    - Must cite sources for all factual claims
+    - Cannot make up information not in the knowledge base
+
+Step 4: Peer Architecture Review (10 min)
+Pair up with another team for a 5-minute review each way:
+
+As presenter (5 min):
+
+Explain your problem in one sentence
+Walk through your architecture diagram
+Highlight your riskiest assumption
+As reviewer (5 min): Ask these questions:
+
+"What happens when [component X] fails?"
+"How does this scale to 10x the data/users?"
+"What's the simplest version you could build in 90 minutes?"

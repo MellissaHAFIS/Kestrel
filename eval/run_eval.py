@@ -99,18 +99,52 @@ BEDROCK_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 AWS_ENV_FILE = REPO / ".env.aws"
 
 
+#: Credential variables `.env.aws` is allowed to override in the ambient
+#: environment. A developer box may already carry AWS credentials for an
+#: unrelated account (an IDE, a shell profile, another tool). Those would
+#: otherwise silently win and the benchmark would quietly run against the wrong
+#: account, which is exactly the kind of thing that makes a number unreportable.
+_AWS_OVERRIDE_KEYS = frozenset(
+    {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+    }
+)
+
+
 def _load_aws_env() -> None:
-    """Load AWS_* lines from .env.aws into the environment if present (never printed)."""
+    """Load AWS_* lines from .env.aws into the environment (values never printed).
+
+    Accepts both `KEY=value` and the `export KEY=value` form, because that is
+    what the Workshop Studio event page hands you to paste into a terminal.
+    For credential keys the file wins over whatever is already in the
+    environment; everything else is only filled in if unset.
+    """
     if not AWS_ENV_FILE.exists():
         return
-    for line in AWS_ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    loaded: list[str] = []
+    for raw in AWS_ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
         k, _, v = line.partition("=")
         k, v = k.strip(), v.strip().strip('"').strip("'")
-        if k and k not in os.environ:
+        if not k or not v:
+            continue
+        if k in _AWS_OVERRIDE_KEYS or k not in os.environ:
             os.environ[k] = v
+            loaded.append(k)
+    # `AWS_DEFAULT_REGION` alone does not set `AWS_REGION`, which _prepare reads.
+    if "AWS_REGION" not in os.environ and os.environ.get("AWS_DEFAULT_REGION"):
+        os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"]
+    if loaded:
+        print(f"[bench] loaded {len(loaded)} vars from .env.aws: {', '.join(sorted(loaded))}")
 
 
 def _prepare(mode: str) -> None:

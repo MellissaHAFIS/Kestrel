@@ -1,0 +1,424 @@
+PolicyGuard — Hackathon Project Plan
+Event: Secure Horizons (UTOPIA × KRYPTOSPHERE × ESSEC MetaLab), ESSEC Cergy, Oct 10–11, 2026, 36h Track: 2 — Defenders Augmented (AI for
+cybersecurity + securing AI) Jury: GitGuardian · ESSEC MetaLab · KPMG Working name: PolicyGuard (guard) protecting DevAssist (target agent)
+
+
+
+
+1. WHAT am I building?
+One sentence: an agentic security investigator that supervises another AI agent in real time and answers the question nobody can answer today:
+
+         "Is this agent doing exactly what we asked it to do, and nothing else?"
+
+Two agents, clearly separated:
+
+
+                  DevAssist (the protected agent)               PolicyGuard Investigator (the guard)
+
+
+
+ Role           Developer assistant deployed in a        Security supervisor wrapped around DevAssist
+                company
+
+
+ Tools          read files, write code, open PRs, send   session history, policy retrieval, secret scan,
+                notifications, HTTP / web search         destination check, path classification, static code
+                (simulated)                              scan, canary check, human approval
+ Why it        Gives us something realistic to attack   The actual product
+ exists        and defend
+
+
+
+
+What PolicyGuard does
+
+    1.​ Defines the agent's mandate as a natural-language policy (YAML), e.g. "never read .env", "no POST to non-allowlisted domains", "never put credentials in
+        code".
+    2.​ Intercepts every input, tool call and output of the target agent (LangChain callbacks / LangGraph middleware).
+    3.​ Investigates ambiguous actions with its own tool loop instead of guessing from one prompt.
+    4.​ Acts: allow, block, sanitize, or escalate to a human (interrupt()).
+    5.​ Logs everything to an exportable audit trail.
+
+Integration story: a drop-in Python middleware for any LangChain/LangGraph agent, a few lines of code and no rewrite of the existing agent. API-gateway and
+sidecar modes are future work. Limits: non-Python agents and closed vendor agents are not covered by the first version.
+
+
+
+
+2. WHY this idea?
+The problem: agents already run in production with real access (files, APIs, email, code). Their failures are behavioral drift, not classic intrusions:
+
+    ●​ Each individual action looks legitimate (legitimate agent, legitimate access, legitimate text).
+    ●​ The danger is in the chain: read secret → paste it into code → POST it somewhere external.
+    ●​ Classic tools (firewall, antivirus, SIEM, DLP) look at packets, signatures, logs and files. They do not understand what the agent is trying to do.
+
+Why now:
+
+    ●​    Agent deployment is ahead of agent security tooling.
+    ●​    Indirect prompt injection against tool-using agents is documented in the research literature (see benchmarks below).
+    ●​    Regulation (EU AI Act, NIS2, DORA) pushes toward auditability of AI systems in production.
+    ●​    The event pitch itself is about agents doing things nobody told them to do.
+Why the angles B + C: (B) attack surface invisible to classic tools, (C) missing governance layer after deployment. PolicyGuard is both: semantic detection and
+policy enforcement with human control.
+
+Honest positioning: guardrail tools already exist (Guardrails AI, NeMo Guardrails, Lakera Guard, Rebuff, LangSmith for observability). Most focus on input/output
+filtering or observability. Our differentiation is the combination of natural-language policy + tool-call interception + an investigating agent with tools +
+enforcement + audit. Do not claim "nobody has done this"; claim "we focus on multi-step behavioral drift of tool-using agents".
+
+
+
+
+3. IMPACT
+         Stakeholder                                          Why they care
+
+ GitGuardian                     Natural extension of "secrets in code" to "secrets and dangerous
+                                 behavior in agents that read and write code". Our canary and
+                                 secret-scan tools are in their domain.
+
+
+
+
+ KPMG                            Their clients (banks, insurers, large groups) deploy agents and need an
+                                 audit trail and controls for AI governance and compliance.
+
+
+
+ ESSEC MetaLab                   Visible governance: explicit policy, human-in-the-loop, explainable
+                                 decisions, audit log.
+
+
+ Any company with agents         A reusable security layer: pip-installable, framework-native.
+ in production
+
+
+
+
+What the jury should remember: "They built a security layer designed natively for AI agents, evaluated on public benchmarks, and it works as a drop-in."
+Possible continuation (to mention, not to overclaim): open-source core, enterprise features later (hosted dashboard, multi-agent management, compliance
+reports). Partnership or incubation with jury companies.
+
+
+
+
+4. HOW — Architecture
+User ─► [Input guard] ─► DevAssist (LLM + tools) ─► [Output guard] ─► Out
+                  │
+               [Tool guard] (every tool call is intercepted)
+                  │
+                  ▼
+          PolicyGuard Investigator (agent)
+                  │
+          Policy store (YAML) · Audit log (SQLite)
+                  │
+        Response engine: allow · block · sanitize · escalate
+
+
+
+4.1 The Investigator is an agent, not an LLM call
+
+A single "prompt → JSON verdict" call is a classifier, not an agent. The Investigator runs a loop:
+
+Intercepted action
+    │
+    ▼
+ TRIAGE (cheap rules + small model)
+ ├─ clearly benign → ALLOW (1 step, fast path)
+ └─ ambiguous / risky
+     ▼
+ ┌─► REASON: what do I still need to know?
+ │     ▼
+ │ ACT: call an investigation tool
+ │     ▼
+ │ OBSERVE: update evidence and confidence
+│    ▼
+└── confidence < threshold AND steps left? ── yes ──┘
+      │ no
+      ▼
+ VERDICT: allow / block / sanitize / escalate (human via interrupt())
+
+
+
+Investigator tools (read-only, treated as data sources):
+
+
+                 Tool                                                   Purpose
+
+ get_session_history                      What the target agent did earlier (catches chains)
+
+
+
+ read_policy(section)                     Retrieve relevant rules from the policy store
+
+ scan_secrets(text)                       Deterministic pattern and entropy scan (e.g.
+                                          detect-secrets; ggshield if available)
+
+
+ check_destination(url)                   Allowlist and domain checks
+
+ classify_path(path)                      Is this file sensitive (.env, keys, CODEOWNERS, data class)?
+
+
+
+ static_scan(code)                        Bandit / Semgrep on generated code (SQLi, hardcoded creds)
+
+
+
+ check_canary(text)                       Detect planted honeytokens, which gives proof of exfiltration
+
+
+
+ request_human_approval                   LangGraph interrupt()
+LangGraph structure: nodes triage → reason ⇄ tools (ToolNode) → verdict → human_interrupt (optional). State: action_under_review,
+evidence[], confidence, steps_used.
+
+Safety of the guard itself: the inspected content may contain injections aimed at the guard. Therefore: read-only tools, inspected content passed strictly as data,
+hard step budget (~6), escalate to human if still uncertain.
+
+
+4.2 Does it satisfy the 5 agentic criteria?
+
+Litmus test: can I answer in one shot, without looking anything up or changing anything? No → agent.
+
+
+ #           Criterion             DevAssist (protected                  PolicyGuard Investigator
+                                         agent)
+
+
+ 1   Live / external data via   files, repo, HTTP, search      session history, policy retrieval, scanners,
+     tools                                                     destination lookup
+
+
+ 2   Actions in the world       open PRs, send                 block, sanitize, quarantine, escalate to human
+                                notifications, POST
+
+
+ 3   Number of steps            depends on the task            1 step (benign) to ~6 (ambiguous chain)
+     unknown ahead
+
+
+ 4   Reacts to results          adapts to file contents        next tool depends on the last observation
+                                                               (clean scan → check history)
+
+
+
+
+ 5   Constraint met by          finish the coding task         reach confidence ≥ threshold within a step
+     iteration                                                 and latency budget, else escalate
+Not an LLM call: input → output with no outside world. Both agents loop reason → act → observe.
+
+
+
+
+5. HOW — Stack
+       Layer                                                Choice
+
+ Agent framework     LangGraph + LangChain (tools, callbacks / middleware, interrupt())
+
+
+
+ Models              A small fast model for the target agent and triage, a stronger model for the
+                     Investigator reasoning; temperature=0 for verdicts (check which models the
+                     event gives credits for)
+
+
+ Interception        LangChain callbacks (on_llm_start, on_tool_start, on_llm_end) and/or
+                     LangGraph middleware
+
+
+ Policy store        YAML / JSON, retrieved by section (no vector DB needed for the demo)
+
+
+
+ Security tools      detect-secrets, Bandit or Semgrep, simple allowlist logic
+
+
+
+ Audit log           SQLite
+
+ UI / demo           Chainlit (live feed + Approve / Block buttons)
+
+ Tracing             LangSmith
+ Evaluation           Python + scikit-learn metrics; optional DeepEval / Giskard (verify, see section 8)
+
+
+
+
+6. HOW — Observability
+Level 1 — Live trace (shown during the demo). One line per event in Chainlit:
+
+[10:42:01] INPUT   "Finish the auth module"      CLEAN
+[10:42:03] TOOL CALL file_read("/src/auth/.env")  BLOCKED (policy: no .env access)
+[10:42:04] OUTPUT code containing an API-key pattern ALERT (severity 9)
+[10:42:05] ESCALATION human approval required        PENDING
+
+
+
+Level 2 — Investigation trace. For each investigated action: tools called, observations, confidence progression, final reasoning. This visibly proves the loop.
+
+Level 3 — Risk score. Per action, scored on intent (inside mandate?), sensitivity (data touched), anomaly (vs. the session's baseline). Keep the formula simple and
+documented.
+
+Level 4 — Audit trail (exportable JSON/CSV).
+
+session_id | timestamp | event_type | action | evidence | violation | severity | reasoning | decision | steps_used | latency_ms
+
+
+
+LangSmith provides low-level traces of all LLM and tool calls, SQLite is the compliance-facing record.
+
+
+
+
+7. HOW — Evaluation
+Principle: do not rely on a home-made benchmark alone (biased, slow to build). Use public benchmarks and frameworks, and report an ablation.
+7.1 Benchmarks
+        Benchmark                         What it tests                              Role
+
+ InjecAgent (Zhan et al.,     Indirect prompt injection against      Primary: detection / attack success
+ 2024, ~1,054 cases)          tool-integrated agents (direct harm,   rate
+                              data exfiltration)
+
+
+
+
+ AgentDojo (ETH Zurich)       Dynamic agent environments with        Primary or secondary: does the
+                              utility and security metrics           guard stop attacks while the agent
+                                                                     still completes tasks?
+
+
+
+
+ R-Judge (2024, ~569          Whether a judge recognizes safety      Evaluates the Investigator as a
+ agent interaction records)   risks in agent trajectories            judge
+
+
+
+ Small custom multi-step      Read-secret → leak chains and          Supplement only. Public
+ set (~10 chains)             mandate violations                     benchmarks are mostly single-step.
+                                                                     State this bias openly.
+
+
+
+
+Use a representative subset (a few hundred cases) rather than everything, and pick the subset before tuning.
+
+
+7.2 Variants compared (the key experiment)
+            Variant                              Description
+
+ 0. No guard                     Baseline: DevAssist alone
+ A. One-shot judge                 A single LLM verdict per action
+
+ B. Investigator agent             Triage + tool loop
+
+
+The claim to test: B beats A, especially on multi-step chains. If it does not, report that honestly and say what the loop still adds (explanations, evidence).
+
+
+7.3 Metrics
+
+    ●​   Attack success rate (ASR): baseline vs. guarded (the delta is the impact)
+    ●​   Detection recall on attacks, false positive rate on benign cases, precision, F1
+    ●​   Benign utility: % of legitimate tasks still completed (a guard that blocks everything is useless)
+    ●​   Latency overhead per action (fast path vs. investigated path)
+    ●​   Average tool calls / steps per verdict and cost per action
+    ●​   Report a confusion matrix, and per-category results (injection, exfiltration, mandate violation)
+
+All numbers shown to the jury must come from actual runs. Do not use placeholder values.
+
+
+
+
+8. THE one demo use case
+"DevAssist finishes the auth module" — poisoned context leads to a secret-exfiltration chain.
+
+Why this one: it contains the whole story in one run: indirect injection (public benchmark relevance), behavioral drift (event pitch), secrets (GitGuardian), audit and
+compliance (KPMG), human control (ESSEC MetaLab).
+
+Setup: DevAssist has simulated tools and a repo with a planted .env containing a canary token. While working it reads a third-party file (README or ticket
+comment) containing a hidden instruction.
+
+Act 1 — Without PolicyGuard (~1 min). Task: "Help me finish the authentication module." DevAssist reads .env, embeds the secret in generated code, POSTs
+"documentation" to an external endpoint. No alert anywhere. The canary proves the leak.
+Act 2 — Same task, PolicyGuard on (~2 min). Live feed: .env read flagged, Investigator loop visible (scan secrets → check history → check destination), POST
+blocked, human Approve / Block button appears.
+
+Act 3 — Audit and numbers (~1 min). Show the SQLite / JSON audit trail, then the benchmark slide: ASR without guard vs. with guard, A vs. B ablation, latency
+overhead.
+
+Bonus (30 seconds, only if time): the same pipeline catching vulnerable generated code (static scan) and an out-of-mandate action. Do not build separate demos
+for these.
+
+
+
+
+9. 36-hour plan
+                              Block                               Time             Deliverable
+
+ Team formation, policy YAML, scope freeze                       2h        Agreed scope and roles
+
+
+
+ Target agent DevAssist + simulated tools + canary repo          3h        Attack reproducible without
+                                                                           guard
+
+
+ Interception layer (callbacks / middleware)                     4h        Every action reaches the
+                                                                           guard
+
+
+ Investigator agent (LangGraph + tools)                          6h        Loop works on the demo
+                                                                           chain
+
+
+ Audit log + Chainlit dashboard + HITL                           5h        Live demo UI
+ Evaluation harness (InjecAgent subset, AgentDojo or R-Judge,       6h      Results table
+ custom chains, variants 0/A/B)
+
+
+
+ Slides + demo rehearsal (x3)                                       3h      5 slides, 4-minute script
+
+
+
+ Buffer (bugs, sleep)                                               ~7h
+
+
+Cut order if late: bonus scenarios → second benchmark → risk-score formula → fancy dashboard. Never cut: the demo chain, the A vs. B comparison, the audit
+log.
+
+
+
+
+10. Risks and honest limits
+   ●​   Latency and cost of an agent on every action → triage fast path, step budget.
+   ●​   The guard can be attacked (injections in inspected content) → read-only tools, content as data, human escalation.
+   ●​   False positives can make the agent unusable → measure benign utility explicitly.
+   ●​   Scope creep → one demo chain, one stack.
+   ●​   Limited integration scope: Python / LangChain / LangGraph first.
+   ●​   Benchmark fit: public benchmarks are not a perfect match for multi-step chains, so say what they do and do not cover.
+
+
+
+
+11. Verification checklist before building
+Some names and details come from memory and need checking:
+
+   ●​ [ ] InjecAgent: exact paper, repo, license, dataset size, format.
+   ●​ [ ] R-Judge: exact paper, repo, number of records and labels.
+  ●​    [ ] AgentDojo: repo, how to plug in a defense, which suites to use.
+  ●​    [ ] DeepEval: confirm which metrics actually exist (an injection-specific metric may not be in the library). Fall back to scikit-learn metrics if not.
+  ●​    [ ] Giskard: confirm LangChain / LangGraph support and whether it is worth the time.
+  ●​    [ ] Models and API credits provided by the organizers.
+  ●​    [ ] Hackathon rules: is open-source reuse of pre-existing benchmarks and libraries allowed, and is pre-built code allowed?
+  ●​    [ ] Details on the jury companies' current products (check their sites, since my knowledge may be outdated).
+
+
+
+
+12. 30-second pitch
+       "Companies are deploying AI agents with real access to code, files and APIs, but nobody can verify that an agent is doing only what it was told to do.
+       The danger is not an obvious attack; it is a chain of individually legitimate actions. PolicyGuard is an investigating agent that sits around any LangChain
+       or LangGraph agent, understands the policy in natural language, checks the chain with real security tools, and blocks, sanitizes or escalates to a
+       human, with a full audit trail. We evaluated it on public agent-security benchmarks, compared with and without the guard, and it installs in a few lines of
+       code."

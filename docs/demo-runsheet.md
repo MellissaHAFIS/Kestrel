@@ -3,6 +3,17 @@
 Everything here runs on the laptop, offline. No AWS needed for the recording. Aim for ~3 minutes.
 Record 2-3 takes. Start the video track EARLY, it is the only time-risky item.
 
+> **Commands below are Windows.** On Linux/macOS replace `.venv\Scripts\python.exe` with
+> `.venv/bin/python` (or whatever venv you built). On Fedora the pins need Python 3.12:
+> `chainlit==2.12.0` requires `<3.14`, so a 3.14-only box can run the demo and the benchmark
+> but not the console until `python3.12` is installed. See README "Quickstart".
+
+> **Numbers to quote (real Bedrock run, Claude Haiku 4.5, 2026-10-11):** attack success
+> **100% -> 7.1%** (1 of 14 chains), harmful steps stopped **93.3%**, benign completion
+> **35.7%**. If you quote the benign number, quote the reason in the same breath: a quarantined
+> tool is unavailable until an analyst approves it, and 7 benign chains legitimately want the
+> tool we quarantined. Any figure not in `docs/defence-sheet.md` §4 does not get said out loud.
+
 ## Before you hit record (one-time setup, ~2 min)
 1. Open two terminals at the repo root.
 2. Terminal A (the console) - start it and leave it running:
@@ -34,6 +45,10 @@ SAY, as the layers print: "Registry quarantines the poisoned tool at connection.
 invariant blocks the exact canary leak. The gate and the Investigator handle the subtler cases.
 The canary never leaves."
 POINT AT: the final "PASS: PolicyGuard blocked the leak" line.
+NOTE: each step is now decided by a different layer, which is the point. Step 1 gate-allow,
+step 2 Investigator-escalate, step 3 REGISTRY-block, steps 4-5 invariant-block. If step 3 ever
+says "hard invariant violated" instead of "Tool quarantined by registry", the registry
+regression is back.
 
 ### [1:45-2:25] The console - humans stay in control (Terminal A browser)
 TYPE: tools   SAY: "Layer one. Every tool is scanned before use. search_docs is quarantined,
